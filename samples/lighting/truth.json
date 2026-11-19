@@ -1,0 +1,22 @@
+{
+ "soft_shadow.jpg": {
+  "expect_structural": false,
+  "expect_light": true
+ },
+ "hard_shadow.jpg": {
+  "expect_structural": false,
+  "expect_light": true
+ },
+ "hard_shadow_crack.jpg": {
+  "expect_structural": true,
+  "expect_light": true
+ },
+ "crack.jpg": {
+  "expect_structural": true,
+  "expect_light": false
+ },
+ "nochange.jpg": {
+  "expect_structural": false,
+  "expect_light": false
+ }
+}

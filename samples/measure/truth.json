@@ -1,0 +1,38 @@
+{
+ "w0.25mm": {
+  "width_mm": 0.25,
+  "len_ref_mm": 116.2389593467051,
+  "len_new_mm": 178.66613721010089,
+  "mmpp_true": 0.2279042538479816
+ },
+ "w0.5mm": {
+  "width_mm": 0.5,
+  "len_ref_mm": 116.2389593467051,
+  "len_new_mm": 178.66613721010089,
+  "mmpp_true": 0.2279042538479816
+ },
+ "w1.0mm": {
+  "width_mm": 1.0,
+  "len_ref_mm": 116.2389593467051,
+  "len_new_mm": 178.66613721010089,
+  "mmpp_true": 0.2279042538479816
+ },
+ "w0.5mm_rough": {
+  "width_mm": 0.5,
+  "len_ref_mm": 116.2389593467051,
+  "len_new_mm": 178.66613721010089,
+  "mmpp_true": 0.2279042538479816
+ },
+ "no_crack": {
+  "width_mm": 0.0,
+  "len_ref_mm": 0,
+  "len_new_mm": 0,
+  "mmpp_true": 0.2279042538479816
+ },
+ "no_crack_rough": {
+  "width_mm": 0.0,
+  "len_ref_mm": 0,
+  "len_new_mm": 0,
+  "mmpp_true": 0.2279042538479816
+ }
+}

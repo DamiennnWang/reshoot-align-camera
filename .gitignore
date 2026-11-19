@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+archive/
+samples/results/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+.DS_Store
+real_data/
+宣传/blender/render/
+宣传/blender/tex/
+宣传/宣传片_*.mp4

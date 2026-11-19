@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.FieldAlign" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF16202A</item>
+        <item name="android:navigationBarColor">#FF16202A</item>
+    </style>
+</resources>
