@@ -60,6 +60,7 @@ fun RegisterScreen(vm: AppViewModel, r: Screen.Register) {
     } }
     var name by remember { mutableStateOf(r.qrText ?: "系列 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date())) }
     val isNew = r.existingPhotoId == null
+    var kinds by remember { mutableStateOf(com.fieldalign.camera.align.Defects.fromQr(r.qrText)) }
     val hasQr = m.qrText != null
 
     Scaffold(containerColor = Page, topBar = {
@@ -105,12 +106,18 @@ fun RegisterScreen(vm: AppViewModel, r: Screen.Register) {
                 Modifier.padding(12.dp), color = if (selected.size >= 3) Good else Warn, fontSize = 13.sp)
             if (isNew) OutlinedTextField(name, { name = it }, label = { Text("系列名称") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+            if (isNew) Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp)) {
+                Text("这个测点拍什么？（可多选，以后在系列菜单里可改）", fontSize = 14.sp)
+                if (com.fieldalign.camera.align.Defects.fromQr(r.qrText).isNotEmpty())
+                    Text("已按二维码里写的类型自动选好", fontSize = 12.sp, color = Good)
+                KindPicker(kinds) { kinds = it }
+            }
             Row(Modifier.fillMaxWidth().padding(12.dp)) {
                 OutlinedButton(onClick = { if (isNew) vm.discard(r.file) else vm.back() }, Modifier.weight(1f)) {
                     Text(if (isNew) "丢弃照片" else "取消")
                 }
                 Spacer(Modifier.width(12.dp))
-                Button(onClick = { vm.saveRegister(r, name, selected.sorted().map { cands[it] }) }, Modifier.weight(1f),
+                Button(onClick = { vm.saveRegister(r, name, selected.sorted().map { cands[it] }, kinds) }, Modifier.weight(1f),
                     enabled = !isNew || name.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = Ink)) {
                     Text(if (isNew) "建立系列" else "设为参考")

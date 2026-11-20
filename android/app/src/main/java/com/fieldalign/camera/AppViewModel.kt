@@ -124,15 +124,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun discard(file: File) { repo.discard(file); back(); continueQueue() }
 
-    fun saveRegister(r: Screen.Register, name: String, dots: List<AlignEngine.Dot>) = viewModelScope.launch {
+    fun saveRegister(r: Screen.Register, name: String, dots: List<AlignEngine.Dot>,
+                     kinds: Set<com.fieldalign.camera.align.Defects.Kind> = emptySet()) = viewModelScope.launch {
         if (r.existingPhotoId != null) {
             repo.setReference(r.existingPhotoId, dots)
             toast = "已设为参考照片"
             back()
         } else {
-            val zid = repo.createZone(name.ifBlank { r.qrText ?: "未命名系列" }, r.file, r.markers, dots, r.qrText)
+            val zid = repo.createZone(name.ifBlank { r.qrText ?: "未命名系列" }, r.file, r.markers, dots, r.qrText, kinds = kinds)
             if (importQueue.isNotEmpty()) { back(); continueQueue() } else replaceTop(Screen.ZoneDetail(zid))
         }
+    }
+
+    /** 重新分析进度（改测点类型、改二维码尺寸后），null = 空闲。 */
+    var reanalyzing by mutableStateOf<String?>(null); private set
+
+    fun changeKinds(zoneId: Long, kinds: Set<com.fieldalign.camera.align.Defects.Kind>) = viewModelScope.launch {
+        reanalyzing = "重新分析…"
+        repo.setKinds(zoneId, kinds) { i, n -> reanalyzing = if (n == 0) null else "重新分析 $i / $n" }
+        reanalyzing = null; toast = "已按「${com.fieldalign.camera.align.Defects.labels(kinds)}」重新分析"
+    }
+
+    fun changeQrMm(zoneId: Long, mm: Double) = viewModelScope.launch {
+        reanalyzing = "重新分析…"
+        repo.setQrMm(zoneId, mm) { i, n -> reanalyzing = if (n == 0) null else "重新分析 $i / $n" }
+        reanalyzing = null
     }
 
     /** 把已有照片设为参考：先读出它的靶标，再进圆点确认页。 */

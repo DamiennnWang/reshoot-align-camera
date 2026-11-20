@@ -167,12 +167,18 @@ private fun ZoneRow(vm: AppViewModel, z: ZoneSummary, modifier: Modifier) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (z.qrText != null) Pill(z.qrText, Info, icon = Icons.Default.QrCode2)
                     else Pill("无码", Muted)
-                    if (z.lat != null) Pill("有位置", Good, icon = Icons.Default.LocationOn)
+                    if (z.kinds != null) Pill(com.fieldalign.camera.align.Defects.labels(com.fieldalign.camera.align.Defects.parse(z.kinds)), Muted)
+                    else if (z.lat != null) Pill("有位置", Good, icon = Icons.Default.LocationOn)
                 }
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${z.photoCount} 张 · ${fmtTime(z.lastTaken)}", color = Muted, fontSize = 12.sp)
-                    if (z.lastChanges != null) {
+                    val lv = z.lastConclusion?.let { Regex("^【(.+?)】").find(it)?.groupValues?.get(1) }
+                    if (lv != null) {                                   // 最近一次的判定等级
+                        Spacer(Modifier.width(8.dp))
+                        Box(Modifier.size(7.dp).background(levelColor(lv), CircleShape))
+                        Text(" 最近：$lv", color = levelColor(lv), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    } else if (z.lastChanges != null) {
                         Spacer(Modifier.width(8.dp))
                         Box(Modifier.size(7.dp).background(if (z.lastChanges > 0) Warn else Good, CircleShape))
                         Text(if (z.lastChanges > 0) " 最近 ${z.lastChanges} 处变化" else " 最近无变化",

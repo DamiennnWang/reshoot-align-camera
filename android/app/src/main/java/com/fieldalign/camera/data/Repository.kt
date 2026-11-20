@@ -4,6 +4,8 @@ import android.content.Context
 import com.fieldalign.camera.align.AlignEngine
 import com.fieldalign.camera.align.AlignEngine.Dot
 import com.fieldalign.camera.align.AlignEngine.Markers
+import com.fieldalign.camera.align.Analysis
+import com.fieldalign.camera.align.Defects
 import com.fieldalign.camera.align.ImageIO
 import com.fieldalign.camera.align.Measure
 import com.fieldalign.camera.align.P
@@ -207,19 +209,24 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         val excl = AlignEngine.comparisonMask(refWork.cols(), refWork.rows(), res, if (useMarkers) rm.qrCorners else null, refDots)
         val c = AlignEngine.compare(refWork, aligned, valid, excl, resRatio = AlignEngine.resolutionRatio(res))
         val dir = resultDir(z.id, id)
-        val fa = File(dir, "aligned.jpg"); val fc = File(dir, "changes.jpg"); val fk = File(dir, "cracks.jpg")
+        val fa = File(dir, "aligned.jpg"); val fc = File(dir, "changes.jpg"); val fk = File(dir, "findings.jpg")
         ImageIO.saveJpeg(aligned, fa)
         ImageIO.saveJpeg(AlignEngine.changesView(refWork, c), fc)
-        // 裂缝参数 + 文字结论（比例尺来自参考照片里的二维码）
-        val cr = measureCracks(z, rm, refWork, aligned, valid, excl, c, fk)
-        db.photos().update(db.photos().get(id)!!.copy(changedRatio = c.changedRatio, changeRegions = c.regions.size,
-            mmPerPx = cr.mmpp, crackCount = cr.ch.new.cracks.size, crackLenPx = cr.ch.new.totalPx, crackMaxWPx = cr.ch.new.maxWPx,
-            crackGrowPx = cr.ch.growPx, crackJson = Measure.toJson(cr.ch, cr.mmpp, cr.level, fk.absolutePath),
-            conclusion = "【${cr.level}】${cr.text}",
+        // 病害分析（按测点类型选基元）：比例尺来自参考照片里的二维码
+        val an = analyze(z, rm, refDots, if (useMarkers) rm.qrCorners else null, refWork, aligned, valid, excl, c, fk)
+        db.photos().update(withAnalysis(db.photos().get(id)!!, an, z, fk).copy(changedRatio = c.changedRatio, changeRegions = c.regions.size,
             similarity = c.similarity, lightRatio = c.lightRatio, lightRegions = c.lightRegions.size,
             glareRatio = c.glareRatio, quality = AlignEngine.qualityWarnings(c, work).joinToString("\n").ifEmpty { null },
             alignedPath = fa.absolutePath, changesPath = fc.absolutePath))
         return id
+    }
+
+    /** 把分析结果写进照片记录（裂缝参数、等级 + 文字结论、病害明细）。 */
+    private fun withAnalysis(p: Photo, an: Analysis.Result, z: Zone, img: File): Photo {
+        val ch = an.crack
+        return p.copy(mmPerPx = an.mmpp, crackCount = ch?.new?.cracks?.size, crackLenPx = ch?.new?.totalPx, crackMaxWPx = ch?.new?.maxWPx,
+            crackGrowPx = ch?.growPx, crackJson = ch?.let { Measure.toJson(it, an.mmpp, an.level, img.absolutePath) },
+            conclusion = "【${an.level}】${an.text}", findingsJson = Analysis.toJson(an, Defects.parse(z.kinds), img.absolutePath))
     }
 
     /** 参考照片的范围在新照片中占多大（面积比）。远小于 1：新照片比参考拍得更大范围。 */
@@ -233,35 +240,76 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         com.fieldalign.camera.align.convexHullArea(q) / (nm.workW.toDouble() * nm.workH)
     }.getOrNull()
 
-    class CrackResult(val ch: Measure.Change, val mmpp: Double?, val level: String, val text: String)
-
-    /** 在对比区（去掉靶标、反光、无效区）里测裂缝、算比例、出结论，标注图写到 out。 */
-    private fun measureCracks(z: Zone, rm: Markers, refWork: Mat, aligned: Mat, valid: Mat, excl: Mat?,
-                              c: AlignEngine.CompareResult, out: File): CrackResult {
+    /**
+     * 病害分析：对比区 = 有效 ∩ 一致区 ∩ 非靶标；全区 = 有效 ∩ 非靶标（位移类测点用）。标注图写到 out。
+     * @param qr 参考照片里的二维码角点（新照片也读到同一个码时才排除靶标）
+     */
+    private fun analyze(z: Zone, rm: Markers, refDots: List<Dot>, qr: List<P>?, refWork: Mat, aligned: Mat, valid: Mat, excl: Mat?,
+                        c: AlignEngine.CompareResult, out: File): Analysis.Result {
         val w = refWork.cols(); val h = refWork.rows()
-        val m = Mat(); org.opencv.core.Core.compare(c.changeMask, org.opencv.core.Scalar(0x40.toDouble()), m, org.opencv.core.Core.CMP_NE)
-        org.opencv.core.Core.bitwise_and(m, valid, m)
-        if (excl != null) org.opencv.core.Core.bitwise_and(m, excl, m)
-        val ch = Measure.compare(AlignEngine.gray(refWork), AlignEngine.gray(aligned), m)
+        val cmp = valid.clone(); if (excl != null) org.opencv.core.Core.bitwise_and(cmp, excl, cmp)
+        val full = valid.clone(); if (qr != null) org.opencv.core.Core.bitwise_and(full, AlignEngine.markerMask(w, h, qr, refDots), full)
         val sc = Measure.scaleFromQr(rm.qrCorners, z.qrMm ?: Measure.qrSizeMm(rm.qrText ?: z.qrText))
-        val mmpp = sc?.let { s ->
-            val ks = ch.new.cracks.ifEmpty { ch.ref.cracks }
-            val at = if (ks.isEmpty()) P(rm.qrCorners!!.sumOf { it.x } / 4, rm.qrCorners.sumOf { it.y } / 4)
-                     else P(ks.sumOf { it.cx * it.lengthPx } / ks.sumOf { it.lengthPx }, ks.sumOf { it.cy * it.lengthPx } / ks.sumOf { it.lengthPx })
-            s.mmPerPx(at)
+        val qc = rm.qrCorners?.let { q -> P(q.sumOf { it.x } / 4, q.sumOf { it.y } / 4) }
+        val an = Analysis.run(Defects.parse(z.kinds), refWork, aligned, cmp, full, c, sc, qc)
+        ImageIO.saveJpeg(an.image, out)
+        return an
+    }
+
+    /**
+     * 重新分析整个系列（改了测点类型或二维码尺寸后）：用已存的对齐图重算对比和病害，不重新对齐。
+     * @param onProgress (已完成, 总数)
+     */
+    suspend fun reanalyze(zoneId: Long, onProgress: (Int, Int) -> Unit = { _, _ -> }) = withContext(Dispatchers.Default) {
+        val z = db.zones().get(zoneId) ?: return@withContext
+        val ref = db.photos().get(z.refPhotoId ?: return@withContext) ?: return@withContext
+        val refWork = refWorkOf(ref.path)
+        val (rm, refDots) = markersFromJson(ref.markersJson)
+        val w = refWork.cols(); val h = refWork.rows()
+        val todo = db.photos().listForZone(zoneId).filter { it.id != ref.id && it.refPhotoId == ref.id && it.alignedPath != null && it.alignJson != null }
+        todo.forEachIndexed { i, p ->
+            onProgress(i, todo.size)
+            runCatching {
+                val o = JSONObject(p.alignJson!!)
+                if (o.isNull("H")) return@runCatching
+                val hm = com.fieldalign.camera.align.Homography(o.getJSONArray("H").let { a -> DoubleArray(9) { a.getDouble(it) } })
+                val roi = if (o.isNull("roi")) null else o.getJSONArray("roi").let { a ->
+                    (0 until a.length()).map { P(a.getJSONArray(it).getDouble(0), a.getJSONArray(it).getDouble(1)) } }
+                val (nm, _) = markersFromJson(p.markersJson)
+                val kN = o.optDouble("k_new", 0.0); val kR = o.optDouble("k_ref", 0.0)
+                val res = AlignEngine.AlignResult(p.status, p.message, hm, roi = roi, kNew = kN, kRef = kR,
+                    newW = nm.workW, newH = nm.workH, refW = w, refH = h)
+                val aligned = ImageIO.loadWorkMat(p.alignedPath!!)
+                val valid = AlignEngine.validMask(nm.workW, nm.workH, hm, w, h, kN, kR)
+                val useMarkers = rm.qrCorners != null && nm.qrCorners != null && rm.qrText == nm.qrText
+                val excl = AlignEngine.comparisonMask(w, h, res, if (useMarkers) rm.qrCorners else null, refDots)
+                val c = AlignEngine.compare(refWork, aligned, valid, excl, resRatio = AlignEngine.resolutionRatio(res))
+                val dir = resultDir(z.id, p.id)
+                val fc = File(dir, "changes.jpg"); val fk = File(dir, "findings.jpg")
+                ImageIO.saveJpeg(AlignEngine.changesView(refWork, c), fc)
+                val an = analyze(z, rm, refDots, if (useMarkers) rm.qrCorners else null, refWork, aligned, valid, excl, c, fk)
+                db.photos().update(withAnalysis(p, an, z, fk).copy(changedRatio = c.changedRatio, changeRegions = c.regions.size,
+                    similarity = c.similarity, lightRatio = c.lightRatio, lightRegions = c.lightRegions.size, glareRatio = c.glareRatio,
+                    changesPath = fc.absolutePath))
+            }
         }
-        val (level, text) = Measure.conclude(ch, mmpp, c.lightRegions.size, c.lightRatio)
-        ImageIO.saveJpeg(Measure.draw(aligned, ch, mmpp), out)
-        return CrackResult(ch, mmpp, level, text)
+        onProgress(todo.size, todo.size)
+    }
+
+    /** 修改测点病害类型，并重新分析已有照片。 */
+    suspend fun setKinds(zoneId: Long, kinds: Set<Defects.Kind>, onProgress: (Int, Int) -> Unit = { _, _ -> }) {
+        withContext(Dispatchers.IO) { db.zones().get(zoneId)?.let { db.zones().update(it.copy(kinds = Defects.encode(kinds))) } }
+        reanalyze(zoneId, onProgress)
     }
 
     /** 新建系列：照片成为参考照片。 */
     suspend fun createZone(name: String, file: File, m: Markers, dots: List<Dot>, qrText: String? = m.qrText,
-                           given: GeoFix? = null, givenPose: Pose? = null): Long = withContext(Dispatchers.IO) {
+                           given: GeoFix? = null, givenPose: Pose? = null,
+                           kinds: Set<Defects.Kind> = Defects.fromQr(qrText)): Long = withContext(Dispatchers.IO) {
         val loc = locOf(file, given); pendingLoc.remove(file.absolutePath)
         val pose = poseOf(file, givenPose); pendingPose.remove(file.absolutePath)
         val zid = db.zones().insert(Zone(qrText = qrText, name = name, createdAt = System.currentTimeMillis(), lat = loc?.lat, lon = loc?.lon,
-            azimuth = pose?.azimuth, pitch = pose?.pitch, qrMm = qrText?.let { Measure.qrSizeMm(it) }))
+            azimuth = pose?.azimuth, pitch = pose?.pitch, qrMm = qrText?.let { Measure.qrSizeMm(it) }, kinds = Defects.encode(kinds)))
         val pid = db.photos().insert(Photo(zoneId = zid, path = file.absolutePath, takenAt = takenAt(file),
             status = "reference", message = "参考照片", markersJson = markersToJson(m, dots),
             how = if (qrText != null && m.qrText == null) "扫码后拍全景" else "新建", lat = loc?.lat, lon = loc?.lon, locAcc = loc?.acc,
@@ -280,17 +328,10 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         sigCache.remove(p.zoneId); guideCache.remove(p.zoneId)
     }
 
-    /** 修改二维码打印尺寸：比例与尺寸成正比，已有照片的毫米值和文字结论一并更新。 */
-    suspend fun setQrMm(id: Long, mm: Double) = withContext(Dispatchers.IO) {
-        val z = db.zones().get(id) ?: return@withContext
-        val old = z.qrMm ?: Measure.qrSizeMm(z.qrText)
-        db.zones().update(z.copy(qrMm = mm))
-        for (p in db.photos().listForZone(id)) {
-            val mmpp = p.mmPerPx?.let { it * mm / old } ?: continue
-            val st = p.crackJson?.let { Measure.stats(it) }
-            val text = st?.let { s -> Measure.conclude(s, mmpp, p.lightRegions ?: 0, p.lightRatio ?: 0.0) }
-            db.photos().update(p.copy(mmPerPx = mmpp, conclusion = text?.let { "【${it.first}】${it.second}" } ?: p.conclusion))
-        }
+    /** 修改二维码打印尺寸：毫米值（长度、宽度、面积、位移）和结论全部按新比例重新分析。 */
+    suspend fun setQrMm(id: Long, mm: Double, onProgress: (Int, Int) -> Unit = { _, _ -> }) {
+        withContext(Dispatchers.IO) { db.zones().get(id)?.let { db.zones().update(it.copy(qrMm = mm)) } }
+        reanalyze(id, onProgress)
     }
 
     suspend fun renameZone(id: Long, name: String) = withContext(Dispatchers.IO) {
@@ -300,7 +341,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
     data class PairResult(val baseImagePath: String, val changesPath: String, val changedRatio: Double,
                           val regions: Int, val similarity: Double, val lightRatio: Double = 0.0, val lightRegions: Int = 0,
                           val warnings: List<String> = emptyList(), val crackPath: String? = null,
-                          val conclusion: String? = null, val mmPerPx: Double? = null)
+                          val conclusion: String? = null, val mmPerPx: Double? = null, val items: List<String> = emptyList())
 
     /**
      * 任选两张对比：同一系列的照片都已变换到参考照片坐标，直接比较两张对齐图即可
@@ -337,14 +378,15 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         val out = File(resultDir(p.zoneId, p.id), "vs_${b.id}.jpg")
         ImageIO.saveJpeg(AlignEngine.changesView(fb.img, c), out)
         val z = db.zones().get(p.zoneId)!!
-        val kOut = File(resultDir(p.zoneId, p.id), "cracks_vs_${b.id}.jpg")
-        val cr = measureCracks(z, rm, fb.img, fp.img, valid, mask, c, kOut)
+        val kOut = File(resultDir(p.zoneId, p.id), "findings_vs_${b.id}.jpg")
+        val an = analyze(z, rm, refDots, rm.qrCorners, fb.img, fp.img, valid, mask, c, kOut)
         PairResult(fb.path, out.absolutePath, c.changedRatio, c.regions.size, c.similarity, c.lightRatio, c.lightRegions.size,
-            AlignEngine.qualityWarnings(c), kOut.absolutePath, "【${cr.level}】${cr.text}", cr.mmpp)
+            AlignEngine.qualityWarnings(c), kOut.absolutePath, "【${an.level}】${an.text}", an.mmpp, an.items)
     }
 
     /**
-     * 导出整个系列为 ZIP：report.csv（Excel 可直接打开）+ 每张照片的原图、对齐图、变化图。
+     * 导出整个系列为 ZIP：report.csv（Excel 可直接打开）+ zone.json（测点信息）+ 每张照片的原图、对齐图、变化图、
+     * 标注图和 findings.json（病害明细：区域轮廓、位移向量、标记线角度等，供电脑上做进一步识别）。
      * 返回 ZIP 文件（在应用私有目录 exports/ 下，通过分享发出）。
      */
     suspend fun exportZone(zoneId: Long): File? = withContext(Dispatchers.IO) {
@@ -361,7 +403,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                 zip.putNextEntry(java.util.zip.ZipEntry(name)); f.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
             }
             val csv = StringBuilder("\uFEFF")   // BOM：Excel 识别 UTF-8 中文
-            csv.append("序号,拍摄时间,是否参考,对齐状态,说明,归类方式,结构变化处数,结构变化占比%,明暗变化处数,明暗变化占比%,反光未比较%,整体相似度,拍摄质量提示,特征匹配点,靶标残差px,畸变k新,畸变k参考,纬度,经度,定位精度m,镜头朝向°,俯仰°,毫米/像素,裂缝条数,裂缝总长,最大宽度,新增长度,单位,文字结论,原图,对齐图,变化图,裂缝图\n")
+            csv.append("序号,拍摄时间,是否参考,对齐状态,说明,归类方式,结构变化处数,结构变化占比%,明暗变化处数,明暗变化占比%,反光未比较%,整体相似度,拍摄质量提示,特征匹配点,靶标残差px,畸变k新,畸变k参考,纬度,经度,定位精度m,镜头朝向°,俯仰°,毫米/像素,裂缝条数,裂缝总长,最大宽度,新增长度,单位,病害类型,判定等级,文字结论,发现明细,原图,对齐图,变化图,标注图,明细数据\n")
             photos.forEachIndexed { i, p ->
                 val n = "%03d".format(i + 1)
                 val isRef = p.id == z.refPhotoId
@@ -380,19 +422,35 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                     p.crackLenPx?.let { "%.1f".format(it * (p.mmPerPx ?: 1.0)) } ?: "",
                     p.crackMaxWPx?.let { "%.2f".format(it * (p.mmPerPx ?: 1.0)) } ?: "",
                     p.crackGrowPx?.let { "%.1f".format(it * (p.mmPerPx ?: 1.0)) } ?: "",
-                    if (p.crackLenPx == null) "" else if (p.mmPerPx != null) "mm" else "px", q(p.conclusion ?: ""),
+                    if (p.crackLenPx == null) "" else if (p.mmPerPx != null) "mm" else "px",
+                    q(Defects.labels(Defects.parse(z.kinds))), q(Regex("^【(.+?)】").find(p.conclusion ?: "")?.groupValues?.get(1) ?: ""),
+                    q(p.conclusion?.replace(Regex("^【.+?】"), "") ?: ""), q(Analysis.itemsOf(p.findingsJson).joinToString("；")),
                     "photos/${n}_original.jpg", if (p.alignedPath != null) "photos/${n}_aligned.jpg" else "",
                     if (p.changesPath != null) "photos/${n}_changes.jpg" else "",
-                    if (p.crackJson != null) "photos/${n}_cracks.jpg" else "").joinToString(",")).append("\n")
+                    if (annotated(p) != null) "photos/${n}_annotated.jpg" else "",
+                    if (p.findingsJson != null) "photos/${n}_findings.json" else "").joinToString(",")).append("\n")
                 put("photos/${n}_original.jpg", File(p.path))
                 put("photos/${n}_aligned.jpg", p.alignedPath?.let { File(it) })
                 put("photos/${n}_changes.jpg", p.changesPath?.let { File(it) })
-                put("photos/${n}_cracks.jpg", p.crackJson?.let { runCatching { JSONObject(it).optString("image") }.getOrNull() }?.takeIf { it.isNotEmpty() }?.let { File(it) })
+                put("photos/${n}_annotated.jpg", annotated(p)?.let { File(it) })
+                p.findingsJson?.let { zip.putNextEntry(java.util.zip.ZipEntry("photos/${n}_findings.json")); zip.write(it.toByteArray()); zip.closeEntry() }
             }
             zip.putNextEntry(java.util.zip.ZipEntry("report.csv")); zip.write(csv.toString().toByteArray()); zip.closeEntry()
+            val meta = JSONObject().apply {
+                put("name", z.name); put("qr", z.qrText ?: JSONObject.NULL); put("kinds", Defects.encode(Defects.parse(z.kinds)) ?: "general")
+                put("kinds_label", Defects.labels(Defects.parse(z.kinds))); put("qr_mm", z.qrMm ?: Measure.qrSizeMm(z.qrText))
+                put("lat", z.lat ?: JSONObject.NULL); put("lon", z.lon ?: JSONObject.NULL)
+                put("azimuth", z.azimuth ?: JSONObject.NULL); put("pitch", z.pitch ?: JSONObject.NULL)
+                put("note", "坐标都在参考照片的对齐坐标系（aligned.jpg）下；面积 mm²、位移 mm 由二维码尺寸换算")
+            }
+            zip.putNextEntry(java.util.zip.ZipEntry("zone.json")); zip.write(meta.toString(1).toByteArray()); zip.closeEntry()
         }
         out
     }
+
+    /** 标注图：病害分析图（含裂缝标注）；老数据只有裂缝图。 */
+    fun annotated(p: Photo): String? = Analysis.imageOf(p.findingsJson)
+        ?: p.crackJson?.let { runCatching { JSONObject(it).optString("image") }.getOrNull() }?.takeIf { it.isNotEmpty() && File(it).exists() }
 
     suspend fun deletePhoto(id: Long) = withContext(Dispatchers.IO) {
         val p = db.photos().get(id) ?: return@withContext

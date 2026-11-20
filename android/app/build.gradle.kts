@@ -13,8 +13,8 @@ android {
         applicationId = "com.fieldalign.camera"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk { abiFilters += listOf("arm64-v8a") }   // 只打 64 位真机，安装包更小
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,7 +37,7 @@ android {
 }
 
 val copySamples by tasks.registering(Copy::class) {
-    from("../../samples") { include("*.jpg", "truth.json", "series/*.jpg", "distortion/*.jpg", "distortion/truth.json", "lighting/*.jpg", "lighting/truth.json", "robustness/*.jpg", "robustness/truth.json", "measure/*_ref.jpg", "measure/*_new.jpg", "measure/truth.json")
+    from("../../samples") { include("*.jpg", "truth.json", "series/*.jpg", "distortion/*.jpg", "distortion/truth.json", "lighting/*.jpg", "lighting/truth.json", "robustness/*.jpg", "robustness/truth.json", "measure/*_ref.jpg", "measure/*_new.jpg", "measure/truth.json", "defects/*.jpg", "defects/truth.json")
         exclude("robustness/*_changes.jpg") }
     into(layout.buildDirectory.dir("generated/testSamples/samples"))
 }

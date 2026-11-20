@@ -55,7 +55,7 @@ import com.fieldalign.camera.data.Photo
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-private val MODES = listOf("滑动", "叠加", "闪烁", "变化", "裂缝", "原图")
+private val MODES = listOf("滑动", "叠加", "闪烁", "变化", "标注", "原图")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,7 +95,8 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
     val changesBmp = rememberBitmap(changesPath) { changesPath?.let { vm.loadBitmap(it) } }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val rawBmp = rememberBitmap(p?.path) { p?.path?.let { vm.loadBitmap(it) } }
-    val crackPath = pair?.crackPath ?: p?.crackJson?.let { runCatching { JSONObject(it).optString("image") }.getOrNull() }?.takeIf { it.isNotEmpty() }
+    val crackPath = pair?.crackPath ?: p?.let { vm.repo.annotated(it) }
+    val items = pair?.items ?: com.fieldalign.camera.align.Analysis.itemsOf(p?.findingsJson)
     val crackBmp = rememberBitmap(crackPath) { crackPath?.let { vm.loadBitmap(it) } }
     val conclusion = pair?.conclusion ?: p?.conclusion
     val mmpp = pair?.mmPerPx ?: p?.mmPerPx
@@ -174,7 +175,7 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
                     }
                 }
             }
-            conclusion?.let { ConclusionCard(it) }
+            conclusion?.let { ConclusionCard(it, items) }
             HeadlineCard(pair?.regions ?: p.changeRegions ?: 0, pair?.changedRatio ?: p.changedRatio ?: 0.0,
                 pair?.lightRegions ?: p.lightRegions ?: 0, p.status)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -224,7 +225,8 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
                 0 -> LabeledSlider("左：参考  右：新照片", split) { split = it }
                 1 -> LabeledSlider("新照片透明度", blend) { blend = it }
                 2 -> Text(if (blinkNew) "新照片" else "参考照片", Modifier.padding(12.dp), color = Color.Gray)
-                4 -> Text("黄色 = 原有裂缝；红色 = 比基准新增的部分；蓝色 = 基准里有、这次没检出（修补/遮挡/不清）。标注：编号、长度 L、最大宽度 W" +
+                4 -> Text("裂缝：黄色 = 原有，红色 = 比基准新增，蓝色 = 基准里有、这次没检出（修补/遮挡/不清），标注长度 L、最大宽度 W。" +
+                    "A = 面状变化（红 剥落、橙 锈蚀、蓝 渗水、紫 泛碱），D = 整体位移（箭头为方向），M = 防松标记（绿 正常、红 疑似松动、橙 残缺），P = 部件变化" +
                     (mmpp?.let { "。比例 1 像素 ≈ %.3f mm（由参考照片中的二维码换算）".format(it) } ?: "。参考照片里没有二维码，以像素表示"),
                     Modifier.padding(12.dp), color = Color.Gray, fontSize = 13.sp)
                 3 -> Text("红色/黄框 = 结构变化（裂缝、剥落等）；浅蓝/蓝框 = 明暗变化（阴影、水渍、光照），不计入变化率；灰白 = 反光/过曝，未比较。只比较重叠且在同一平面上的区域", Modifier.padding(12.dp), color = Color.Gray, fontSize = 13.sp)
@@ -342,18 +344,23 @@ private fun HeadlineCard(regions: Int, ratio: Double, light: Int, status: String
 
 /** 文字结论卡（裂缝参数 + 判定）。文本格式：【等级】正文。 */
 @Composable
-private fun ConclusionCard(text: String) {
+private fun ConclusionCard(text: String, items: List<String> = emptyList()) {
     val level = Regex("^【(.+?)】").find(text)?.groupValues?.get(1) ?: ""
     val body = text.removePrefix("【$level】")
-    val col = when (level) { "稳定", "无裂缝" -> Good; "延长", "变宽" -> Warn; else -> Bad }
+    val col = levelColor(level)
     AppCard(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("裂缝结论", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text("病害结论", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 if (level.isNotEmpty()) Pill(level, col, filled = true)
             }
             Text(body, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp))
+            if (items.isNotEmpty()) {
+                Text("标注明细（切到「标注」查看位置）", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
+                items.forEach { Text(it, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp)) }
+            }
+            Text("手机上为初步判断；精细分析可在系列菜单「导出全部」后在电脑上处理。", fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }

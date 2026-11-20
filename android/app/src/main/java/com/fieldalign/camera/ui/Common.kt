@@ -186,3 +186,35 @@ fun rememberBitmap(key: Any?, loader: suspend () -> Bitmap?): Bitmap? {
     LaunchedEffect(key) { bmp = loader() }
     return bmp
 }
+
+
+/** 测点病害类型选择：按“线状 / 面状 / 位移 / 部件”分组的多选标签。什么都不选 = 通用。 */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun KindPicker(selected: Set<com.fieldalign.camera.align.Defects.Kind>, onChange: (Set<com.fieldalign.camera.align.Defects.Kind>) -> Unit) {
+    val D = com.fieldalign.camera.align.Defects
+    androidx.compose.foundation.layout.Column {
+        D.GROUPS.forEach { g ->
+            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                androidx.compose.material3.Text(g, fontSize = 12.sp, color = Muted, modifier = androidx.compose.ui.Modifier.width(36.dp))
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+                    com.fieldalign.camera.align.Defects.Kind.values().filter { it.group == g }.forEach { k ->
+                        androidx.compose.material3.FilterChip(selected = k in selected,
+                            onClick = { onChange(if (k in selected) selected - k else selected + k) },
+                            label = { androidx.compose.material3.Text(k.label, fontSize = 13.sp) })
+                    }
+                }
+            }
+        }
+        androidx.compose.material3.Text(if (selected.isEmpty()) "未选择：按通用处理（裂缝 + 面状变化 + 位移）" else "已选：" + D.labels(selected),
+            fontSize = 12.sp, color = Muted, modifier = androidx.compose.ui.Modifier.padding(top = 2.dp))
+    }
+}
+
+/** 结论等级的颜色（裂缝等级和通用四级共用）。 */
+fun levelColor(level: String): androidx.compose.ui.graphics.Color = when (level) {
+    "无变化", "稳定", "无裂缝" -> Good
+    "轻微" -> Info
+    "明显", "延长", "变宽" -> Warn
+    else -> Bad
+}
