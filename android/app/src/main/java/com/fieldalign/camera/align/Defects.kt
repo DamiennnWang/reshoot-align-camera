@@ -126,6 +126,20 @@ object Defects {
                     val dL: Double, val contour: List<P>)
 
     const val F = 4
+    const val ROUGH_SPALL = 1.1          // 纹理被替换且粗糙度增加 ≥10%：剥落/掉块（新鲜断面可能更亮，不按明暗分）
+    const val SHADOW_SOFT = 18.0         // 明暗变化区边缘过渡宽于约 18 个 1/4 图像素（约 1.5 cm）：阴影/光照，不算病害
+    const val SHADOW = "阴影/光照变化"
+    private val IGNORE_CLS = setOf("剥落/掉块", "表面缺损", "锈蚀")
+
+    /** 剥落、掉块、锈蚀区域（外扩 pad 像素）：断口边缘、锈痕看起来像裂缝，裂缝对比时这里不算。返回 null = 没有。 */
+    fun areaIgnore(areas: List<Area>, w: Int, h: Int, pad: Int = 12): Mat? {
+        val sel = areas.filter { it.cls in IGNORE_CLS && it.contour.size >= 3 }
+        if (sel.isEmpty()) return null
+        val m = Mat.zeros(h, w, CvType.CV_8U)
+        Imgproc.fillPoly(m, sel.map { a -> MatOfPoint(*a.contour.map { org.opencv.core.Point(it.x, it.y) }.toTypedArray()) }, Scalar(255.0))
+        Imgproc.dilate(m, m, Mat.ones(2 * pad + 1, 2 * pad + 1, CvType.CV_8U))
+        return m
+    }
 
     /**
      * @param mask 255 = 参与比较（有效、在一致区内、非靶标）
@@ -184,11 +198,13 @@ object Defects {
         val Ma = floats(ma); val Mb = floats(mbx); val Saa = floats(box(faa)); val Sbb = floats(box(fbb)); val Sab = floats(box(fab))
         val tL = max(10.0, 4 * sig[0])
         val dark = BooleanArray(n); val white = BooleanArray(n); val rusty = BooleanArray(n); val tex = BooleanArray(n)
+        val sdA = FloatArray(n); val sdB = FloatArray(n)
         val u = ByteArray(n)
         for (i in 0 until n) {
             if (mb[i].toInt() == 0) continue
             val va = max(Saa[i] - Ma[i] * Ma[i], 1e-3f); val vb = max(Sbb[i] - Mb[i] * Mb[i], 1e-3f)
             val ncc = (Sab[i] - Ma[i] * Mb[i]) / sqrt(va * vb)
+            sdA[i] = sqrt(max(Saa[i] - Ma[i] * Ma[i], 0f)); sdB[i] = sqrt(max(Sbb[i] - Mb[i] * Mb[i], 0f))
             val chroma = hypot(B[1][i] - 128.0, B[2][i] - 128.0)
             dark[i] = rL[i] < -tL
             white[i] = rL[i] > tL && chroma < 20
@@ -203,11 +219,19 @@ object Defects {
         val nc = Imgproc.connectedComponentsWithStats(um, labels, stats, cents, 8, CvType.CV_32S)
         val dist = Mat(); Imgproc.distanceTransform(um, dist, Imgproc.DIST_L2, 3)
         val df = floats(dist); val lab = IntArray(n); labels.get(0, 0, lab)
-        class Acc { var n = 0; var dk = 0; var wt = 0; var rs = 0; var tx = 0; var sl = 0.0; var dmax = 0f }
+        // 阴影判断用：残差亮度的梯度（边缘软硬）
+        val rLm = Mat(h, w, CvType.CV_32F); rLm.put(0, 0, rL)
+        Imgproc.GaussianBlur(rLm, rLm, Size(0.0, 0.0), 1.0)
+        val gxm = Mat(); val gym = Mat()
+        Imgproc.Sobel(rLm, gxm, CvType.CV_32F, 1, 0, 3); Imgproc.Sobel(rLm, gym, CvType.CV_32F, 0, 1, 3)
+        val rLs = floats(rLm); val gxa = floats(gxm); val gya = floats(gym)
+        val er = Mat(); Imgproc.erode(labels.let { val o = Mat(); it.convertTo(o, CvType.CV_32F); o }, er, Mat.ones(3, 3, CvType.CV_8U))
+        val erl = floats(er)     // 腐蚀后标签不变 = 内部；变了 = 边缘一圈
+        class Acc { var n = 0; var dk = 0; var wt = 0; var rs = 0; var tx = 0; var sl = 0.0; var dmax = 0f; var sa = 0.0; var sb = 0.0 }
         val acc = Array(nc) { Acc() }
         for (i in 0 until n) {
             val l = lab[i]; if (l == 0) continue
-            val a = acc[l]; a.n++; a.sl += rL[i]; a.dmax = max(a.dmax, df[i])
+            val a = acc[l]; a.n++; a.sl += rL[i]; a.dmax = max(a.dmax, df[i]); a.sa += sdA[i]; a.sb += sdB[i]
             if (dark[i]) a.dk++; if (white[i]) a.wt++; if (rusty[i]) a.rs++; if (tex[i]) a.tx++
         }
         val out = ArrayList<Area>(); val st = IntArray(5)
@@ -223,12 +247,28 @@ object Defects {
             if ((mm2 ?: (areaPx / 400)) < 100) continue                           // < 1 cm² 不报
             val f = { k: Int -> k.toDouble() / a.n }
             val meanL = a.sl / a.n
-            val cls = when {
+            // 粗糙度比：剥落露出骨料、断面更粗糙（>1）；泛碱、湿痕把原纹理盖住或保持（≤1）
+            val rough = a.sb / max(a.sa, a.n.toDouble())
+            var cls = when {
                 f(a.rs) >= 0.3 -> "锈蚀"
+                f(a.tx) >= 0.25 && rough >= ROUGH_SPALL -> "剥落/掉块"
                 f(a.wt) >= 0.4 -> "泛碱/白化"
                 f(a.tx) >= 0.25 -> if (meanL < 0) "剥落/掉块" else "表面缺损"
                 f(a.dk) >= 0.4 -> "渗水/湿痕"
                 else -> "表面变化"
+            }
+            // 阴影/光照：只是明暗变化（纹理没变）、边缘过渡很宽很软。湿痕、泛碱的边缘要硬得多
+            if (cls in setOf("渗水/湿痕", "泛碱/白化", "表面变化") && f(a.tx) < 0.15) {
+                val inAbs = ArrayList<Float>(); val ring = ArrayList<Float>()
+                for (yy in y until y + bh) for (xx in x until x + bw) {
+                    val i = yy * w + xx; if (lab[i] != l) continue
+                    inAbs.add(abs(rLs[i]))
+                    if (erl[i].toInt() != l) ring.add(hypot(gxa[i] / 8.0, gya[i] / 8.0).toFloat())
+                }
+                inAbs.sort(); ring.sort()
+                val peak = inAbs[((inAbs.size - 1) * 0.9).toInt()].toDouble()
+                val grad = if (ring.isEmpty()) 0.0 else ring[ring.size / 2].toDouble()
+                if (peak / max(grad, 1e-3) > SHADOW_SOFT) cls = SHADOW
             }
             val one = Mat(); Core.compare(labels, Scalar(l.toDouble()), one, Core.CMP_EQ)
             val cs = ArrayList<MatOfPoint>(); Imgproc.findContours(one, cs, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)

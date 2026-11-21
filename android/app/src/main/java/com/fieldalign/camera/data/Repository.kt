@@ -16,21 +16,37 @@ import org.json.JSONObject
 import org.opencv.core.Mat
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.max
 
 /** 拍照后的处理结果，决定界面下一步去哪。 */
 sealed class Outcome {
     /** 已对齐对比完成。 */
     data class Aligned(val photoId: Long) : Outcome()
-    /** 新二维码或用户要新建系列：需要确认圆点、起名。 */
+    /** 新二维码或用户要新建测点：需要确认圆点、起名。 */
     data class NeedRegister(val file: File, val markers: Markers, val autoDots: List<Dot>, val qrText: String? = markers.qrText) : Outcome()
-    /** 无码且无法唯一识别：让用户手选系列或新建。 */
+    /** 无码且无法唯一识别：让用户手选测点或新建。 */
     data class Unclassified(val file: File, val markers: Markers, val message: String,
                             val ranking: List<Pair<Zone, Int>>, val distances: Map<Long, Double> = emptyMap(),
-                            val poseOk: Set<Long> = emptySet()) : Outcome()
+                            val poseOk: Set<Long> = emptySet(), val fromPending: Boolean = false) : Outcome()
     data class Error(val message: String) : Outcome()
 }
 
+/** 批量拍摄的模式：新建测点（每张一个测点）/ 复拍（按二维码或 位置 + 朝向 + 图像 匹配已有测点）。 */
+enum class CaptureMode { NEW, RESHOOT }
+
+/** 批量拍摄一张照片的处理结果（不打断拍摄，相机页只显示一行提示）。 */
+sealed class Batch {
+    data class Created(val zoneId: Long, val name: String) : Batch()
+    data class Matched(val zoneId: Long, val photoId: Long, val name: String, val how: String) : Batch()
+    data class Pending(val reason: String) : Batch()
+    data class Error(val message: String) : Batch()
+}
+
 class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
+    companion object {
+        /** 待确认照片：存在 photo 表里，zoneId = -1（不属于任何测点）。 */
+        const val PENDING = -1L
+    }
     private val sigCache = ConcurrentHashMap<Long, AlignEngine.Signature>()   // zoneId → 参考照片识别签名
 
     fun newPhotoFile(): File {
@@ -85,7 +101,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
     }.toString()
 
     // ------------------------------------------------------------- 处理流程
-    /** 照片拍摄位置：相机页传入的 GPS 优先，否则读 EXIF。新建系列/手动归类时还会用到，按文件暂存。 */
+    /** 照片拍摄位置：相机页传入的 GPS 优先，否则读 EXIF。新建测点/手动归类时还会用到，按文件暂存。 */
     private val pendingLoc = ConcurrentHashMap<String, GeoFix>()
     private fun locOf(file: File, given: GeoFix?): GeoFix? =
         (given ?: pendingLoc[file.absolutePath] ?: Geo.fromExif(file))?.also { pendingLoc[file.absolutePath] = it }
@@ -94,19 +110,20 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
 
     /**
      * 拍照后调用：识别 → 查库 → 对齐 → 对比 → 存档。
-     * @param forcedZoneId 用户手动选的、或扫码后锁定的系列（大场景：先扫码锁定，再后退拍全景，照片里可以没有码）
-     * @param newQr 扫到了库里没有的码并锁定：这张（全景）照片作为该码新系列的参考
+     * @param forcedZoneId 用户手动选的、或扫码后锁定的测点（大场景：先扫码锁定，再后退拍全景，照片里可以没有码）
+     * @param newQr 扫到了库里没有的码并锁定：这张（全景）照片作为该码新测点的参考
      * @param loc 拍照时的手机定位
      */
     suspend fun process(file: File, forcedZoneId: Long? = null, hintZoneId: Long? = null,
-                        newQr: String? = null, loc: GeoFix? = null, pose: Pose? = null): Outcome = withContext(Dispatchers.Default) {
+                        newQr: String? = null, loc: GeoFix? = null, pose: Pose? = null,
+                        autoAssign: Boolean = true): Outcome = withContext(Dispatchers.Default) {
         try {
             val work = ImageIO.loadWorkMat(file.absolutePath)
             val m = com.fieldalign.camera.align.QrFallback.detectMarkers(work)
             val here = locOf(file, loc)
             val ps = poseOf(file, pose)
             if (forcedZoneId != null) {
-                val z = db.zones().get(forcedZoneId) ?: return@withContext Outcome.Error("系列不存在")
+                val z = db.zones().get(forcedZoneId) ?: return@withContext Outcome.Error("测点不存在")
                 return@withContext Outcome.Aligned(alignAndStore(z, file, work, m, if (hintZoneId == forcedZoneId) "扫码锁定" else "手动选择", here, ps))
             }
             // 照片里读到的码优先；读不到时用取景时扫码锁定的新码
@@ -128,10 +145,15 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
             val idr = AlignEngine.identify(sig, refs)
             val ranking = idr.ranking.map { it.key to it.inliers }
             fun distNote(z: Zone) = dist[z.id]?.let { "，距 ${Geo.fmtDistance(it)}" } ?: ""
+            if (!autoAssign) {      // 待确认照片：只给排序好的候选，由人决定
+                val poseOk = zones.filter { Geo.poseCompatible(ps?.azimuth, ps?.pitch, it.azimuth, it.pitch) }.map { it.id }.toSet()
+                return@withContext Outcome.Unclassified(file, m, "请确认这张照片属于哪个测点，或新建测点", ranking, dist,
+                    if (ps == null) emptySet() else poseOk, fromPending = true)
+            }
             if (idr.decision == "unique" && idr.best != null)
                 return@withContext Outcome.Aligned(alignAndStore(idr.best, file, work, m, idr.message.dropLast(1) + distNote(idr.best) + "）", here, ps))
-            // 位置 + 朝向辅助：只在定位半径内、镜头朝向也吻合的系列里再判断一次
-            // （远处背景相似的系列、同一点位其他方向的系列都被排除），并放宽特征门槛
+            // 位置 + 朝向辅助：只在定位半径内、镜头朝向也吻合的测点里再判断一次
+            // （远处背景相似的测点、同一点位其他方向的测点都被排除），并放宽特征门槛
             if (here != null) {
                 val r = Geo.nearRadius(here.acc)
                 val near = refs.filter { (dist[it.first.id] ?: Double.MAX_VALUE) <= r &&
@@ -141,11 +163,11 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                     if (nearId.decision == "unique" && nearId.best != null) {
                         val how = if (ps?.azimuth != null && nearId.best.azimuth != null) "位置 + 朝向 + 图像特征" else "位置 + 图像特征"
                         return@withContext Outcome.Aligned(alignAndStore(nearId.best, file, work, m,
-                            "按${how}识别（附近 ${near.size} 个系列中唯一吻合，${nearId.ranking[0].inliers} 个匹配点${distNote(nearId.best)}）", here, ps))
+                            "按${how}识别（附近 ${near.size} 个测点中唯一吻合，${nearId.ranking[0].inliers} 个匹配点${distNote(nearId.best)}）", here, ps))
                     }
                 }
             }
-            // 取景时已识别出系列：按放宽的覆盖率再确认一次，仍唯一指向它才采纳
+            // 取景时已识别出测点：按放宽的覆盖率再确认一次，仍唯一指向它才采纳
             if (hintZoneId != null && idr.decision != "ambiguous") {
                 val relaxed = AlignEngine.identify(sig, refs, minCoverage = 0.03)
                 if (relaxed.decision == "unique" && relaxed.best?.id == hintZoneId)
@@ -157,6 +179,105 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
             Outcome.Error("处理失败：${e.message ?: e.javaClass.simpleName}")
         }
     }
+
+    // ------------------------------------------------------------- 批量拍摄
+    /**
+     * 批量拍摄：拍完立即返回结果、不弹页面。
+     *  - 照片里有已建档的二维码 → 归入该测点（二维码优先，两种模式都一样）；
+     *  - 新建模式，或照片里是没建档的新码 → 直接建新测点（名称 = 码内容，或“测点 月日-序号”）；
+     *  - 复拍模式、无码 → 定位半径内、朝向吻合的测点按距离排序，再用图像特征确认唯一吻合才归入；
+     *    否则进“待确认”，不猜。
+     * @param forcedZoneId 取景时扫码/手选锁定的测点  @param newQr 取景时扫到的新码
+     */
+    suspend fun capture(file: File, mode: CaptureMode, loc: GeoFix?, pose: Pose?, kinds: Set<Defects.Kind>,
+                        forcedZoneId: Long? = null, newQr: String? = null): Batch = withContext(Dispatchers.Default) {
+        try {
+            val work = ImageIO.loadWorkMat(file.absolutePath)
+            val m = com.fieldalign.camera.align.QrFallback.detectMarkers(work)
+            val here = locOf(file, loc); val ps = poseOf(file, pose)
+            if (forcedZoneId != null) {
+                val z = db.zones().get(forcedZoneId) ?: return@withContext Batch.Error("测点不存在")
+                return@withContext Batch.Matched(z.id, alignAndStore(z, file, work, m, "扫码/手选锁定", here, ps), z.name, "锁定")
+            }
+            val qr = m.qrText ?: newQr
+            if (qr != null) db.zones().byQr(qr)?.let { z ->
+                return@withContext Batch.Matched(z.id, alignAndStore(z, file, work, m, "二维码 $qr", here, ps), z.name, "二维码")
+            }
+            if (mode == CaptureMode.NEW || qr != null) {
+                val name = qr ?: autoName()
+                val k = Defects.fromQr(qr).ifEmpty { kinds }
+                val zid = createZone(name, file, m, if (m.qrText != null) AlignEngine.selectReferenceDots(m) else emptyList(), qr, here, ps, k)
+                return@withContext Batch.Created(zid, name)
+            }
+            val hit = matchByPlace(work, here, ps)
+            if (hit != null) {
+                val (z, how) = hit
+                return@withContext Batch.Matched(z.id, alignAndStore(z, file, work, m, how, here, ps), z.name, "位置+图像")
+            }
+            val why = if (here == null) "没有定位，图像也没有唯一吻合的测点" else "附近没有图像吻合的测点（或有多个相似）"
+            db.photos().insert(Photo(zoneId = PENDING, path = file.absolutePath, takenAt = takenAt(file), status = "pending",
+                message = why, markersJson = markersToJson(m, null), lat = here?.lat, lon = here?.lon, locAcc = here?.acc,
+                azimuth = ps?.azimuth, pitch = ps?.pitch))
+            pendingLoc.remove(file.absolutePath); pendingPose.remove(file.absolutePath)
+            Batch.Pending(why)
+        } catch (e: Throwable) {
+            Batch.Error("处理失败：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    /** 自动名称：测点 月日-当天序号（之后可以在测点页改名）。 */
+    private suspend fun autoName(): String {
+        val day = java.text.SimpleDateFormat("MMdd", java.util.Locale.US)
+        val today = day.format(java.util.Date())
+        val n = db.zones().all().count { day.format(java.util.Date(it.createdAt)) == today }
+        return "测点 $today-%02d".format(n + 1)
+    }
+
+    /**
+     * 复拍无码时按 位置 + 朝向 + 图像 找测点：候选 = 定位半径内、朝向吻合（按距离和朝向差排序，最多 10 个），
+     * 在候选里用图像特征确认“唯一吻合”；没有定位时在全部测点里按严格门槛找。返回 (测点, 说明) 或 null。
+     */
+    private suspend fun matchByPlace(work: Mat, here: GeoFix?, ps: Pose?): Pair<Zone, String>? {
+        val zones = db.zones().all().filter { it.refPhotoId != null }
+        if (zones.isEmpty()) return null
+        val sig = AlignEngine.signature(work)
+        if (here != null) {
+            val r = Geo.nearRadius(here.acc)
+            val near = zones.mapNotNull { z ->
+                if (z.lat == null || z.lon == null) return@mapNotNull null
+                val d = Geo.distance(here.lat, here.lon, z.lat, z.lon)
+                if (d > r || !Geo.poseCompatible(ps?.azimuth, ps?.pitch, z.azimuth, z.pitch)) return@mapNotNull null
+                val da = if (ps?.azimuth != null && z.azimuth != null) Geo.angleDiff(ps.azimuth, z.azimuth) else 30.0
+                Triple(z, d, d / max(here.acc, 3.0) + da / 30.0)
+            }.sortedBy { it.third }.take(10)
+            if (near.isNotEmpty()) {
+                val refs = near.mapNotNull { (z, _, _) -> refSignature(z)?.let { z to it } }
+                val id = AlignEngine.identify(sig, refs, minInliers = 20, minCoverage = 0.03)
+                if (id.decision == "unique" && id.best != null) {
+                    val d = near.first { it.first.id == id.best.id }.second
+                    return id.best to "按位置 + ${if (ps?.azimuth != null && id.best.azimuth != null) "朝向 + " else ""}图像识别" +
+                        "（附近 ${near.size} 个测点中唯一吻合，距 ${Geo.fmtDistance(d)}，${id.ranking[0].inliers} 个匹配点）"
+                }
+                return null       // 附近有候选但图像不唯一：交给人
+            }
+        }
+        // 没有定位（或附近没有记录了位置的测点）：只在没有位置记录的测点里、按严格门槛
+        val pool = zones.filter { here == null || it.lat == null }
+        val refs = pool.mapNotNull { z -> refSignature(z)?.let { z to it } }
+        if (refs.isEmpty()) return null
+        val id = AlignEngine.identify(sig, refs)
+        return if (id.decision == "unique" && id.best != null) id.best to id.message else null
+    }
+
+    /** 待确认照片直接建为新测点（自动命名）。 */
+    suspend fun pendingToNewZone(p: Photo, kinds: Set<Defects.Kind>): Long = withContext(Dispatchers.IO) {
+        val (m, _) = markersFromJson(p.markersJson)
+        val loc = if (p.lat != null && p.lon != null) GeoFix(p.lat, p.lon, p.locAcc ?: 30.0, p.takenAt) else null
+        db.photos().deletePending(p.path)
+        createZone(autoName(), File(p.path), m, emptyList(), null, loc, p.pitch?.let { Pose(p.azimuth, it) }, kinds)
+    }
+
+    suspend fun clearPending(path: String) = withContext(Dispatchers.IO) { db.photos().deletePending(path) }
 
     private suspend fun refSignature(z: Zone): AlignEngine.Signature? {
         sigCache[z.id]?.let { return it }
@@ -177,7 +298,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         (sig to ref.path).also { guideCache[zoneId] = it }
     }
 
-    /** 参考照片解码后的工作图缓存（只读使用）：连续拍同一系列时不用每张都重新解码 4000px 原图。 */
+    /** 参考照片解码后的工作图缓存（只读使用）：连续拍同一测点时不用每张都重新解码 4000px 原图。 */
     private val refWorkCache = object : LinkedHashMap<String, Mat>(4, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Mat>?) = size > 2
     }
@@ -200,7 +321,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
             alignJson = alignToJson(res), refPhotoId = ref.id, how = how,
             lat = loc?.lat, lon = loc?.lon, locAcc = loc?.acc, azimuth = pose?.azimuth, pitch = pose?.pitch))
         pendingLoc.remove(file.absolutePath); pendingPose.remove(file.absolutePath)
-        // 老系列没有位置/朝向：第一次带数据的成功复拍补上
+        // 老测点没有位置/朝向：第一次带数据的成功复拍补上
         if (res.h != null && ((z.lat == null && loc != null) || (z.azimuth == null && pose?.azimuth != null)))
             db.zones().update(z.copy(lat = z.lat ?: loc?.lat, lon = z.lon ?: loc?.lon,
                 azimuth = z.azimuth ?: pose?.azimuth, pitch = z.pitch ?: pose?.pitch))
@@ -257,7 +378,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
     }
 
     /**
-     * 重新分析整个系列（改了测点类型或二维码尺寸后）：用已存的对齐图重算对比和病害，不重新对齐。
+     * 重新分析整个测点（改了测点类型或二维码尺寸后）：用已存的对齐图重算对比和病害，不重新对齐。
      * @param onProgress (已完成, 总数)
      */
     suspend fun reanalyze(zoneId: Long, onProgress: (Int, Int) -> Unit = { _, _ -> }) = withContext(Dispatchers.Default) {
@@ -302,7 +423,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         reanalyze(zoneId, onProgress)
     }
 
-    /** 新建系列：照片成为参考照片。 */
+    /** 新建测点：照片成为参考照片。 */
     suspend fun createZone(name: String, file: File, m: Markers, dots: List<Dot>, qrText: String? = m.qrText,
                            given: GeoFix? = null, givenPose: Pose? = null,
                            kinds: Set<Defects.Kind> = Defects.fromQr(qrText)): Long = withContext(Dispatchers.IO) {
@@ -344,8 +465,8 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                           val conclusion: String? = null, val mmPerPx: Double? = null, val items: List<String> = emptyList())
 
     /**
-     * 任选两张对比：同一系列的照片都已变换到参考照片坐标，直接比较两张对齐图即可
-     * （例如本月对上月，而不总是对最早的参考）。结果缓存在 results/<系列>/<照片>/vs_<基准>.jpg。
+     * 任选两张对比：同一测点的照片都已变换到参考照片坐标，直接比较两张对齐图即可
+     * （例如本月对上月，而不总是对最早的参考）。结果缓存在 results/<测点>/<照片>/vs_<基准>.jpg。
      */
     suspend fun compareTwo(baseId: Long, photoId: Long): PairResult? = withContext(Dispatchers.Default) {
         val p = db.photos().get(photoId) ?: return@withContext null
@@ -385,22 +506,55 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
     }
 
     /**
-     * 导出整个系列为 ZIP：report.csv（Excel 可直接打开）+ zone.json（测点信息）+ 每张照片的原图、对齐图、变化图、
+     * 导出整个测点为 ZIP：report.csv（Excel 可直接打开）+ zone.json（测点信息）+ 每张照片的原图、对齐图、变化图、
      * 标注图和 findings.json（病害明细：区域轮廓、位移向量、标记线角度等，供电脑上做进一步识别）。
      * 返回 ZIP 文件（在应用私有目录 exports/ 下，通过分享发出）。
      */
     suspend fun exportZone(zoneId: Long): File? = withContext(Dispatchers.IO) {
         val z = db.zones().get(zoneId) ?: return@withContext null
-        val photos = db.photos().listForZone(zoneId).sortedBy { it.takenAt }
+        val out = newExportFile(z.name)
+        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { zip -> writeZone(zip, z, "") }
+        out
+    }
+
+    /**
+     * 导出全部测点为一个 ZIP：每个测点一个文件夹（结构与单个测点导出相同）+ 顶层 index.json（测点清单）。
+     * 电脑端后处理（web/index.html、python/report.py）可以直接打开。
+     */
+    suspend fun exportAll(): File? = withContext(Dispatchers.IO) {
+        val zones = db.zones().all().filter { it.refPhotoId != null }
+        if (zones.isEmpty()) return@withContext null
+        val out = newExportFile("全部测点")
+        val index = JSONArray()
+        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { zip ->
+            for (z in zones) {
+                val dir = "%03d_%s/".format(z.id, safeName(z.name))
+                writeZone(zip, z, dir)
+                index.put(JSONObject().put("id", z.id).put("name", z.name).put("dir", dir).put("qr", z.qrText ?: JSONObject.NULL)
+                    .put("kinds_label", Defects.labels(Defects.parse(z.kinds))).put("lat", z.lat ?: JSONObject.NULL).put("lon", z.lon ?: JSONObject.NULL))
+            }
+            zip.putNextEntry(java.util.zip.ZipEntry("index.json"))
+            zip.write(JSONObject().put("app", "复拍对齐相机").put("exported_at", System.currentTimeMillis()).put("zones", index).toString(1).toByteArray())
+            zip.closeEntry()
+        }
+        out
+    }
+
+    private fun safeName(n: String) = n.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_")
+
+    private fun newExportFile(name: String): File {
         val dir = File(ctx.filesDir, "exports").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }          // 只保留最新一次导出
-        val safe = z.name.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_")
-        val out = File(dir, "${safe}_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.zip")
+        return File(dir, "${safeName(name)}_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.zip")
+    }
+
+    private suspend fun writeZone(zip: java.util.zip.ZipOutputStream, z: Zone, prefix: String) {
+        val photos = db.photos().listForZone(z.id).sortedBy { it.takenAt }
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA)
-        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { zip ->
+        run {
             fun put(name: String, f: File?) {
                 if (f == null || !f.exists()) return
-                zip.putNextEntry(java.util.zip.ZipEntry(name)); f.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
+                zip.putNextEntry(java.util.zip.ZipEntry(prefix + name)); f.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
             }
             val csv = StringBuilder("\uFEFF")   // BOM：Excel 识别 UTF-8 中文
             csv.append("序号,拍摄时间,是否参考,对齐状态,说明,归类方式,结构变化处数,结构变化占比%,明暗变化处数,明暗变化占比%,反光未比较%,整体相似度,拍摄质量提示,特征匹配点,靶标残差px,畸变k新,畸变k参考,纬度,经度,定位精度m,镜头朝向°,俯仰°,毫米/像素,裂缝条数,裂缝总长,最大宽度,新增长度,单位,病害类型,判定等级,文字结论,发现明细,原图,对齐图,变化图,标注图,明细数据\n")
@@ -433,19 +587,20 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                 put("photos/${n}_aligned.jpg", p.alignedPath?.let { File(it) })
                 put("photos/${n}_changes.jpg", p.changesPath?.let { File(it) })
                 put("photos/${n}_annotated.jpg", annotated(p)?.let { File(it) })
-                p.findingsJson?.let { zip.putNextEntry(java.util.zip.ZipEntry("photos/${n}_findings.json")); zip.write(it.toByteArray()); zip.closeEntry() }
+                p.findingsJson?.let { zip.putNextEntry(java.util.zip.ZipEntry(prefix + "photos/${n}_findings.json")); zip.write(it.toByteArray()); zip.closeEntry() }
             }
-            zip.putNextEntry(java.util.zip.ZipEntry("report.csv")); zip.write(csv.toString().toByteArray()); zip.closeEntry()
+            zip.putNextEntry(java.util.zip.ZipEntry(prefix + "report.csv")); zip.write(csv.toString().toByteArray()); zip.closeEntry()
             val meta = JSONObject().apply {
                 put("name", z.name); put("qr", z.qrText ?: JSONObject.NULL); put("kinds", Defects.encode(Defects.parse(z.kinds)) ?: "general")
                 put("kinds_label", Defects.labels(Defects.parse(z.kinds))); put("qr_mm", z.qrMm ?: Measure.qrSizeMm(z.qrText))
                 put("lat", z.lat ?: JSONObject.NULL); put("lon", z.lon ?: JSONObject.NULL)
                 put("azimuth", z.azimuth ?: JSONObject.NULL); put("pitch", z.pitch ?: JSONObject.NULL)
+                put("ref_file", "photos/%03d_original.jpg".format(photos.indexOfFirst { it.id == z.refPhotoId } + 1))
+                put("created_at", z.createdAt)
                 put("note", "坐标都在参考照片的对齐坐标系（aligned.jpg）下；面积 mm²、位移 mm 由二维码尺寸换算")
             }
-            zip.putNextEntry(java.util.zip.ZipEntry("zone.json")); zip.write(meta.toString(1).toByteArray()); zip.closeEntry()
+            zip.putNextEntry(java.util.zip.ZipEntry(prefix + "zone.json")); zip.write(meta.toString(1).toByteArray()); zip.closeEntry()
         }
-        out
     }
 
     /** 标注图：病害分析图（含裂缝标注）；老数据只有裂缝图。 */

@@ -21,8 +21,8 @@ import kotlin.math.sqrt
 
 /**
  * 取景实时引导：
- *  1. ML Kit 读二维码（告诉界面这是哪个系列）；
- *  2. 已知目标系列时，用 ORB 特征（失败则用二维码四角）求“参考照片的取景框”在当前画面里的位置；
+ *  1. ML Kit 读二维码（告诉界面这是哪个测点）；
+ *  2. 已知目标测点时，用 ORB 特征（失败则用二维码四角）求“参考照片的取景框”在当前画面里的位置；
  *  3. 由取景框与画面边框的差别给出移动提示；连续几帧都对准时 aligned = true。
  * 所有坐标都归一化到 0..1（竖屏、已按传感器方向摆正）。
  */
@@ -35,14 +35,14 @@ class FrameGuide(private val onState: (LiveState) -> Unit) : ImageAnalysis.Analy
         val aligned: Boolean = false,
         val source: String = "",         // "特征" / "二维码"
         val error: Double? = null,
-        val suggestedZone: Long? = null, // 无码时按画面特征唯一识别出的系列
+        val suggestedZone: Long? = null, // 无码时按画面特征唯一识别出的测点
     )
 
-    /** 目标系列：参考照片的低分辨率签名，以及（若有）参考照片中二维码四角的归一化坐标。 */
+    /** 目标测点：参考照片的低分辨率签名，以及（若有）参考照片中二维码四角的归一化坐标。 */
     class Target(val sig: AlignEngine.Signature, val refQrNorm: List<P>?)
 
     @Volatile var target: Target? = null
-    /** 所有系列的低分辨率参考签名：没有目标、也没扫到码时，用来按画面特征自动识别系列。 */
+    /** 所有测点的低分辨率参考签名：没有目标、也没扫到码时，用来按画面特征自动识别测点。 */
     @Volatile var candidates: List<Pair<Long, AlignEngine.Signature>> = emptyList()
     private var frameNo = 0
     private var suggested: Long? = null
@@ -80,8 +80,8 @@ class FrameGuide(private val onState: (LiveState) -> Unit) : ImageAnalysis.Analy
 
             val t = target
             if (t == null) {
-                // 无目标、无码：每隔几帧按画面特征在所有系列里找，连续两次指向同一系列才采纳
-                var hint = if (qrText == null) "对准二维码或拍摄对象，或先选择系列" else ""
+                // 无目标、无码：每隔几帧按画面特征在所有测点里找，连续两次指向同一测点才采纳
+                var hint = if (qrText == null) "对准二维码或拍摄对象，或先选择测点" else ""
                 val cands = candidates
                 if (qrText == null && cands.isNotEmpty() && frameNo++ % 6 == 0) {
                     val sig = AlignEngine.signature(yPlaneUpright(image, rot), side = 640, nFeatures = 1500)
@@ -90,7 +90,7 @@ class FrameGuide(private val onState: (LiveState) -> Unit) : ImageAnalysis.Analy
                     if (idr.decision == "unique") {
                         if (idr.best == suggested) suggestVotes++ else { suggested = idr.best; suggestVotes = 1 }
                     } else { suggested = null; suggestVotes = 0 }
-                    if (idr.decision == "ambiguous") hint = "画面与多个系列相似，请扫码或手动选择系列"
+                    if (idr.decision == "ambiguous") hint = "画面与多个测点相似，请扫码或手动选择测点"
                 }
                 onState(LiveState(qrText = qrText, hint = hint, suggestedZone = if (suggestVotes >= 2) suggested else null))
                 return

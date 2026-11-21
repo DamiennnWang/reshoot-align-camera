@@ -67,7 +67,7 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
         refPhoto = photo?.refPhotoId?.let { vm.repo.db.photos().get(it) }
     }
     val p = photo
-    // 对比基准：默认是参考照片，也可以选同系列的其他照片（如上一次）
+    // 对比基准：默认是参考照片，也可以选同测点的其他照片（如上一次）
     var siblings by remember { mutableStateOf<List<Photo>>(emptyList()) }
     var baseId by remember { mutableStateOf<Long?>(null) }
     var pair by remember { mutableStateOf<com.fieldalign.camera.data.Repository.PairResult?>(null) }
@@ -127,7 +127,7 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
                     Column(Modifier.padding(16.dp)) {
                         StatusChip(p.status)
                         Text(p.message, modifier = Modifier.padding(top = 8.dp))
-                        Text("可以换个角度重拍，或在系列里把这张设为新的参考照片。", color = Color.Gray, fontSize = 13.sp,
+                        Text("可以换个角度重拍，或在测点里把这张设为新的参考照片。", color = Color.Gray, fontSize = 13.sp,
                             modifier = Modifier.padding(top = 8.dp))
                         Row(Modifier.padding(top = 10.dp)) {
                             androidx.compose.material3.Button(onClick = {
@@ -360,7 +360,7 @@ private fun ConclusionCard(text: String, items: List<String> = emptyList()) {
                 Text("标注明细（切到「标注」查看位置）", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
                 items.forEach { Text(it, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp)) }
             }
-            Text("手机上为初步判断；精细分析可在系列菜单「导出全部」后在电脑上处理。", fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
+            Text("手机上为初步判断；精细分析可在测点菜单「导出全部」后在电脑上处理。", fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }

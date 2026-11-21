@@ -35,5 +35,14 @@ class DemoSeed {
             val zid = repo.createZone(title, ref, m, com.fieldalign.camera.align.AlignEngine.selectReferenceDots(m), "${m.qrText}-$name", kinds = kinds)
             repo.process(copy("defects/${name}_new.jpg"), forcedZoneId = zid)
         }
+        for ((name, title, kinds) in listOf(Triple("curve_grow", "二衬 弯曲裂缝 K3+120", setOf(Kind.CRACK)),
+                                            Triple("spall_light", "墩柱 剥落 2#", setOf(Kind.SPALL)),
+                                            Triple("spall_on_crack", "箱梁腹板 裂缝+剥落", emptySet()))) {
+            val ref = copy("hard/${name}_ref.jpg")
+            val m = com.fieldalign.camera.align.QrFallback.detectMarkers(com.fieldalign.camera.align.ImageIO.loadWorkMat(ref.absolutePath))
+            val zid = repo.createZone(title, ref, m, com.fieldalign.camera.align.AlignEngine.selectReferenceDots(m), "${m.qrText}-$name", kinds = kinds)
+            repo.process(copy("hard/${name}_new.jpg"), forcedZoneId = zid)
+        }
+        android.util.Log.i("DemoSeed", "导出：" + repo.exportAll()?.absolutePath); Unit
     }
 }

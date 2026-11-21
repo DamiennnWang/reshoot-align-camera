@@ -46,8 +46,9 @@ class DefectsDeviceTest {
     }
 
     private fun analyze(name: String, kinds: Set<Kind>): Analysis.Result {
-        val refWork = ImageIO.loadWorkMat(asset("defects/${name}_ref.jpg").absolutePath)
-        val newWork = ImageIO.loadWorkMat(asset("defects/${name}_new.jpg").absolutePath)
+        val path = if ("/" in name) name else "defects/$name"
+        val refWork = ImageIO.loadWorkMat(asset("${path}_ref.jpg").absolutePath)
+        val newWork = ImageIO.loadWorkMat(asset("${path}_new.jpg").absolutePath)
         val rm = AlignEngine.detectMarkers(refWork); val dots = AlignEngine.selectReferenceDots(rm)
         val res = AlignEngine.align(refWork, rm, dots, newWork, AlignEngine.detectMarkers(newWork))
         val (aligned, valid) = AlignEngine.warpToRef(newWork, res)
@@ -91,6 +92,45 @@ class DefectsDeviceTest {
         }
         Log.i(TAG, rep.toString())
         assertEquals("有 $fails 个病害用例不符合预期：$rep", 0, fails)
+    }
+
+    /**
+     * 难样例（python/make_hard_samples.py，与 python/test_hard.py 同一标准）：弯曲/网状裂缝不被拆碎、
+     * 剥落边缘不算新裂缝、浅色断面算剥落不算泛碱、柔和阴影不算渗水。
+     */
+    @Test
+    fun hardCases() {
+        val truth = JSONObject(asset("hard/truth.json").readText())
+        val rep = StringBuilder("\n难样例 | 等级 | 结果\n"); var fails = 0
+        for (name in truth.keys()) {
+            val t = truth.getJSONObject(name)
+            val k = t.getString("kind")
+            val kinds = if (k.startsWith("crack") && !t.has("area_cls")) setOf(Kind.CRACK) else emptySet()
+            val r = analyze("hard/$name", kinds)
+            val ch = r.crack!!; val mm = r.mmpp!!
+            val big = r.areas.filter { (it.mm2 ?: 0.0) >= 100 }
+            val lv = Measure.conclude(ch, mm).first
+            var ok = when (k) {
+                "crack_grow" -> lv in setOf("延长", "新增", "延长且变宽") && abs(ch.growPx * mm / t.getDouble("grow_mm") - 1) < 0.35
+                "crack_same" -> lv == "稳定" && abs(ch.new.totalPx * mm / t.getDouble("total_mm") - 1) < 0.35
+                "crack_widen" -> lv in setOf("变宽", "延长且变宽")
+                else -> true
+            }
+            if (k.startsWith("crack")) ok = ok && ch.new.cracks.size <= (if (name == "map_nochange") 6 else 2)
+            if (t.has("area_cls") || k == "spall") {
+                val want = t.optString("area_cls", "剥落/掉块")
+                val hit = big.filter { it.cls == want }
+                ok = ok && hit.size == 1 && big.size == 1 && abs(hit[0].mm2!! / t.getDouble("area_mm2") - 1) < 0.35
+            }
+            if (t.optString("crack") == "same") ok = ok && lv == "稳定"
+            val limit = name == "hairline_grow"          // 检测下限附近：只记录
+            if (!ok && !limit) fails++
+            rep.append("${if (ok) "✓" else if (limit) "·" else "✗"} $name | $lv | 裂缝 ${ch.new.cracks.size} 条（上次 ${ch.ref.cracks.size}）" +
+                " 总长 %.0f mm 新增 %.0f mm | ".format(ch.new.totalPx * mm, ch.growPx * mm) +
+                r.areas.joinToString("；") { "${it.cls} %.0f mm²".format(it.mm2 ?: 0.0) } + " | ${r.timing}\n")
+        }
+        Log.i(TAG, rep.toString())
+        assertEquals("有 $fails 个难样例不符合预期：$rep", 0, fails)
     }
 
     /** 业务流程：建档带类型 → 复拍出结论和明细 → 改类型后重新分析 → 导出包里有明细数据。 */

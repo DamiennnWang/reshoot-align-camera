@@ -1,0 +1,53 @@
+{
+ "curve_grow": {
+  "kind": "crack_grow",
+  "grow_mm": 196.8,
+  "total_mm": 366.1
+ },
+ "curve_nochange": {
+  "kind": "crack_same",
+  "total_mm": 337.9
+ },
+ "curve_widen": {
+  "kind": "crack_widen",
+  "w_ref_mm": 0.3,
+  "w_new_mm": 0.7,
+  "total_mm": 284.3
+ },
+ "map_nochange": {
+  "kind": "crack_same",
+  "total_mm": 624.2
+ },
+ "hairline_grow": {
+  "kind": "crack_grow",
+  "grow_mm": 131.3,
+  "total_mm": 263.2
+ },
+ "curve_stain": {
+  "kind": "crack_same",
+  "total_mm": 308.4,
+  "area_cls": "渗水/湿痕",
+  "area_mm2": 3334.7
+ },
+ "spall_light": {
+  "kind": "spall",
+  "area_mm2": 2736.3
+ },
+ "spall_small": {
+  "kind": "spall",
+  "area_mm2": 206.3
+ },
+ "spall_rebar": {
+  "kind": "spall",
+  "area_mm2": 2788.5
+ },
+ "spall_shadow": {
+  "kind": "spall",
+  "area_mm2": 1880.8
+ },
+ "spall_on_crack": {
+  "kind": "spall",
+  "area_mm2": 2369.2,
+  "crack": "same"
+ }
+}

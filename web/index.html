@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复拍对齐 · 电脑端后处理</title>
+<style>
+:root {
+  --ink: #16202a; --ink2: #2b3a48; --amber: #ffb020; --good: #22a06b; --warn: #e08a00; --bad: #d64545; --info: #2f80ed;
+  --muted: #6b7785; --page: #f2f4f7; --card: #fff; --line: #e3e7ec; --text: #16202a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --page: #0f151b; --card: #18212a; --line: #2a3642; --text: #e6ebf0; --muted: #93a0ad; }
+}
+:root[data-theme="dark"] { --page: #0f151b; --card: #18212a; --line: #2a3642; --text: #e6ebf0; --muted: #93a0ad; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+header { background: linear-gradient(180deg, var(--ink), var(--ink2)); color: #fff; padding: 14px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+header .sub { color: #aab6c3; font-size: 12px; }
+header .sp { flex: 1; }
+button, .btn { border: 0; border-radius: 10px; padding: 8px 14px; font: inherit; cursor: pointer; background: rgba(255,255,255,.14); color: #fff; }
+.btn.primary { background: var(--amber); color: var(--ink); font-weight: 600; }
+main { padding: 16px 20px; max-width: 1500px; margin: 0 auto; }
+.drop { border: 2px dashed var(--line); border-radius: 18px; padding: 56px 20px; text-align: center; color: var(--muted); background: var(--card); }
+.drop.over { border-color: var(--amber); }
+.drop h2 { color: var(--text); margin: 0 0 8px; font-size: 18px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+.stat b { display: block; font-size: 24px; }
+.stat span { color: var(--muted); font-size: 12px; }
+.layout { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+.side { background: var(--card); border-radius: 14px; padding: 10px; position: sticky; top: 10px; max-height: calc(100vh - 20px); overflow: auto; }
+.side input { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--page); color: var(--text); font: inherit; }
+.chips { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+.chip { padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--text); font-size: 12px; }
+.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.zone { display: flex; gap: 10px; padding: 8px; border-radius: 10px; cursor: pointer; align-items: center; }
+.zone:hover { background: var(--page); }
+.zone.sel { background: var(--page); outline: 2px solid var(--amber); }
+.zone img { width: 54px; height: 54px; object-fit: cover; border-radius: 8px; background: var(--line); flex: none; }
+.zone .n { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zone .m { color: var(--muted); font-size: 12px; }
+.lv { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; color: #fff; white-space: nowrap; }
+.card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { margin: 0 0 4px; font-size: 18px; }
+.meta { color: var(--muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+tr.row { cursor: pointer; } tr.row:hover td { background: var(--page); } tr.row.sel td { background: var(--page); }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.tab { padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--text); }
+.tab.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.viewer { position: relative; background: #000; border-radius: 12px; overflow: hidden; user-select: none; }
+.viewer img { display: block; width: 100%; height: auto; }
+.viewer .top { position: absolute; inset: 0; overflow: hidden; }
+.viewer .top img { position: absolute; left: 0; top: 0; }
+.viewer .bar { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--amber); cursor: ew-resize; }
+.viewer .bar::after { content: "⇆"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--amber); color: var(--ink); border-radius: 99px; padding: 4px 8px; font-weight: 700; }
+.viewer .lab { position: absolute; top: 8px; padding: 2px 8px; border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; }
+.items { margin: 10px 0 0; padding-left: 18px; }
+.concl { white-space: pre-wrap; background: var(--page); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+.note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+#report { display: none; }
+@media print {
+  header, .stats, .layout, .drop, .note { display: none !important; }
+  #report { display: block; }
+  body { background: #fff; color: #000; }
+  .rz { page-break-inside: avoid; border-bottom: 1px solid #ccc; padding: 10px 0; }
+  .rz .imgs { display: flex; gap: 8px; } .rz .imgs img { width: 49%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>复拍对齐 · 电脑端后处理</h1><div class="sub">打开手机导出的 ZIP（单个测点或「导出全部」）。数据只在本机浏览器里处理，不上传。</div></div>
+  <div class="sp"></div>
+  <label class="btn primary">打开导出包<input id="file" type="file" accept=".zip" multiple hidden></label>
+  <button id="print" disabled>打印 / 存为 PDF</button>
+</header>
+<main>
+  <div id="drop" class="drop"><h2>把导出的 ZIP 拖到这里</h2>
+    <div>手机：首页「导出全部」或测点菜单「导出」→ 发到电脑 → 拖进来。可以一次拖多个。</div></div>
+  <div id="app" hidden>
+    <div class="stats" id="stats"></div>
+    <div class="layout">
+      <aside class="side">
+        <input id="q" placeholder="搜索测点名称 / 编号">
+        <div class="chips" id="filters"></div>
+        <div id="list"></div>
+      </aside>
+      <section id="detail"></section>
+    </div>
+  </div>
+  <div class="note">需要重新分析（更高分辨率、调整阈值）时，在电脑上运行 <code>python python/report.py 导出包.zip</code>，会生成带统计的 HTML 报告。</div>
+  <div id="report"></div>
+</main>
+<script>
+"use strict";
+// ---------------------------------------------------------------- ZIP（浏览器自带 DecompressionStream，不依赖外部库）
+async function readZip(file) {
+  const buf = await file.arrayBuffer(), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("不是有效的 ZIP 文件");
+  const n = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder("utf-8"), entries = new Map();
+  for (let k = 0; k < n; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    const off = dv.getUint32(p + 42, true), name = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+    entries.set(name, { method, csize, off });
+    p += 46 + nl + el + cl;
+  }
+  async function data(name) {
+    const e = entries.get(name); if (!e) return null;
+    const start = e.off + 30 + dv.getUint16(e.off + 26, true) + dv.getUint16(e.off + 28, true);
+    const raw = u8.subarray(start, start + e.csize);
+    if (e.method === 0) return raw;
+    const s = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  return { names: [...entries.keys()], data,
+    text: async n => { const d = await data(n); return d ? dec.decode(d) : null; },
+    url: async n => { const d = await data(n); return d ? URL.createObjectURL(new Blob([d], { type: n.endsWith(".json") ? "application/json" : "image/jpeg" })) : null; } };
+}
+
+function parseCsv(t) {
+  t = t.replace(/^﻿/, ""); const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true; else if (c === ",") { row.push(f); f = ""; }
+    else if (c === "\n") { row.push(f); rows.push(row); row = []; f = ""; } else if (c !== "\r") f += c;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  const h = rows.shift() || [];
+  return rows.filter(r => r.length > 1).map(r => Object.fromEntries(h.map((k, i) => [k, r[i] ?? ""])));
+}
+
+// ---------------------------------------------------------------- 数据
+const ATTN = new Set(["明显", "建议重点关注", "延长", "变宽", "延长且变宽", "新增"]);
+const RANK = { "建议重点关注": 5, "新增": 4, "延长且变宽": 4, "明显": 3, "延长": 3, "变宽": 3, "轻微": 2, "稳定": 1, "无裂缝": 1, "无变化": 1 };
+function lvColor(l) { return ({ "无变化": "var(--good)", "稳定": "var(--good)", "无裂缝": "var(--good)", "轻微": "var(--info)", "明显": "var(--warn)", "延长": "var(--warn)", "变宽": "var(--warn)" })[l] || (l ? "var(--bad)" : "var(--muted)"); }
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const zones = []; let sel = null, selPhoto = null, filter = "all", mode = "slider";
+
+async function addZip(file) {
+  const z = await readZip(file);
+  const dirs = z.names.filter(n => n === "zone.json" || n.endsWith("/zone.json")).map(n => n.slice(0, -"zone.json".length));
+  for (const d of dirs) {
+    const meta = JSON.parse(await z.text(d + "zone.json"));
+    const rows = parseCsv((await z.text(d + "report.csv")) || "");
+    const photos = rows.map(r => ({ r, n: r["序号"], time: r["拍摄时间"], isRef: r["是否参考"] === "是", level: r["判定等级"],
+      text: r["文字结论"], items: (r["发现明细"] || "").split("；").filter(Boolean), status: r["对齐状态"], how: r["归类方式"],
+      files: { orig: r["原图"] && d + r["原图"], aligned: r["对齐图"] && d + r["对齐图"], changes: r["变化图"] && d + r["变化图"],
+               annot: r["标注图"] && d + r["标注图"], json: r["明细数据"] && d + r["明细数据"] } }));
+    const others = photos.filter(p => !p.isRef);
+    const last = others[others.length - 1];
+    const worst = others.reduce((a, p) => (RANK[p.level] || 0) > (RANK[a?.level] || 0) ? p : a, null);
+    const key = (meta.name || "") + "|" + (meta.created_at || d);
+    if (zones.some(x => x.key === key)) continue;      // 同一测点重复拖入
+    zones.push({ key, zip: z, dir: d, meta, photos, last, worst, src: file.name, thumb: null });
+  }
+}
+
+async function urlOf(z, path) {
+  if (!path) return null;
+  z.cache ??= {}; return z.cache[path] ??= await z.zip.url(path);
+}
+
+// ---------------------------------------------------------------- 界面
+const $ = id => document.getElementById(id);
+function render() {
+  $("drop").hidden = zones.length > 0; $("app").hidden = zones.length === 0; $("print").disabled = zones.length === 0;
+  const nPhotos = zones.reduce((a, z) => a + z.photos.length, 0);
+  const attn = zones.filter(z => ATTN.has(z.last?.level));
+  const todo = zones.filter(z => !z.last);
+  $("stats").innerHTML = [["测点", zones.length], ["照片", nPhotos], ["最近一次需关注", attn.length], ["只有参考、待复拍", todo.length]]
+    .map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join("");
+  $("filters").innerHTML = [["all", "全部"], ["attn", "需关注"], ["todo", "待复拍"]]
+    .map(([k, v]) => `<button class="chip ${filter === k ? "on" : ""}" data-f="${k}">${v}</button>`).join("");
+  const q = $("q").value.trim().toLowerCase();
+  const shown = zones.filter(z => (!q || (z.meta.name || "").toLowerCase().includes(q) || String(z.meta.qr || "").toLowerCase().includes(q)) &&
+      (filter === "all" || (filter === "attn" && ATTN.has(z.last?.level)) || (filter === "todo" && !z.last)))
+    .sort((a, b) => (RANK[b.last?.level] || 0) - (RANK[a.last?.level] || 0));
+  $("list").innerHTML = shown.map(z => `<div class="zone ${z === sel ? "sel" : ""}" data-k="${esc(z.key)}">
+      <img data-thumb="${esc(z.key)}" alt=""><div style="min-width:0"><div class="n">${esc(z.meta.name)}</div>
+      <div class="m">${esc(z.meta.kinds_label || "通用")} · ${z.photos.length} 张</div>
+      ${z.last ? `<span class="lv" style="background:${lvColor(z.last.level)}">${esc(z.last.level || "—")}</span>` : `<span class="m">待复拍</span>`}</div></div>`).join("")
+    || `<div class="empty">没有符合条件的测点</div>`;
+  shown.forEach(async z => { const img = document.querySelector(`img[data-thumb="${CSS.escape(z.key)}"]`);
+    const ref = z.photos.find(p => p.isRef) || z.photos[0]; if (img && ref) img.src = await urlOf(z, ref.files.orig); });
+  renderDetail();
+}
+
+async function renderDetail() {
+  const z = sel, el = $("detail");
+  if (!z) { el.innerHTML = `<div class="card empty">左侧选择一个测点</div>`; return; }
+  const m = z.meta;
+  const loc = m.lat != null ? `${(+m.lat).toFixed(6)}, ${(+m.lon).toFixed(6)}` : "无位置";
+  const p = selPhoto || z.last || z.photos[0];
+  el.innerHTML = `<div class="card"><h2>${esc(m.name)}</h2>
+    <div class="meta">编号 ${esc(m.qr ?? "无码")} · 类型 ${esc(m.kinds_label || "通用")} · 位置 ${loc}${m.azimuth != null ? ` · 朝向 ${Math.round(m.azimuth)}°` : ""} · 来自 ${esc(z.src)}</div>
+    <table style="margin-top:10px"><tr><th>#</th><th>拍摄时间</th><th>判定</th><th>结论</th></tr>
+    ${z.photos.map(x => `<tr class="row ${x === p ? "sel" : ""}" data-n="${x.n}"><td>${x.n}</td><td>${esc(x.time)}</td>
+      <td>${x.isRef ? `<span class="lv" style="background:var(--ink)">参考</span>` : `<span class="lv" style="background:${lvColor(x.level)}">${esc(x.level || x.status)}</span>`}</td>
+      <td>${esc((x.text || x.r["说明"] || "").slice(0, 80))}${(x.text || "").length > 80 ? "…" : ""}</td></tr>`).join("")}</table></div>
+    <div class="card" id="view"></div>`;
+  const v = $("view");
+  if (!p || p.isRef || !p.files.aligned) {
+    v.innerHTML = `<div class="meta">参考照片</div><div class="viewer" style="margin-top:8px"><img src="${await urlOf(z, p?.files.orig)}"></div>`;
+    return;
+  }
+  const ref = z.photos.find(x => x.isRef);
+  const tabs = [["slider", "前后对比（拖动）"], ["annot", "病害标注"], ["changes", "变化图"], ["orig", "原图"]].filter(([k]) => k !== "annot" || p.files.annot);
+  if (!tabs.some(t => t[0] === mode)) mode = "slider";
+  v.innerHTML = `<div class="tabs">${tabs.map(([k, s]) => `<button class="tab ${mode === k ? "on" : ""}" data-m="${k}">${s}</button>`).join("")}</div><div id="vw"></div>
+    <div class="concl"><b style="color:${lvColor(p.level)}">【${esc(p.level)}】</b>${esc(p.text)}</div>
+    ${p.items.length ? `<ol class="items">${p.items.map(i => `<li>${esc(i)}</li>`).join("")}</ol>` : ""}
+    <div class="meta" style="margin-top:8px">对齐 ${esc(p.status)} · ${esc(p.how)} · 毫米/像素 ${esc(p.r["毫米/像素"] || "—")}</div>`;
+  const vw = $("vw");
+  if (mode === "slider") {
+    const a = await urlOf(z, ref.files.orig), b = await urlOf(z, p.files.aligned);
+    vw.innerHTML = `<div class="viewer" id="cmp"><img src="${a}"><div class="top" style="width:50%"><img src="${b}"></div>
+      <div class="bar" style="left:50%"></div><span class="lab" style="left:8px">本次 ${esc(p.time)}</span><span class="lab" style="right:8px">参考 ${esc(ref.time)}</span></div>`;
+    const c = $("cmp"), top = c.querySelector(".top"), bar = c.querySelector(".bar"), ti = top.querySelector("img");
+    const fit = () => { ti.style.width = c.clientWidth + "px"; }; fit(); new ResizeObserver(fit).observe(c);
+    const move = e => { const r = c.getBoundingClientRect(); const x = Math.min(Math.max((e.touches ? e.touches[0].clientX : e.clientX) - r.left, 0), r.width);
+      top.style.width = x + "px"; bar.style.left = x + "px"; };
+    let drag = false;
+    c.addEventListener("pointerdown", e => { drag = true; move(e); c.setPointerCapture(e.pointerId); });
+    c.addEventListener("pointermove", e => drag && move(e)); c.addEventListener("pointerup", () => drag = false);
+  } else {
+    vw.innerHTML = `<div class="viewer"><img src="${await urlOf(z, p.files[mode])}"></div>`;
+  }
+}
+
+async function buildReport() {
+  const out = [`<h1>复拍对比报告</h1><p>${new Date().toLocaleString("zh-CN")} · ${zones.length} 个测点</p>`];
+  const sorted = [...zones].sort((a, b) => (RANK[b.last?.level] || 0) - (RANK[a.last?.level] || 0));
+  for (const z of sorted) {
+    const ref = z.photos.find(p => p.isRef), p = z.last;
+    out.push(`<div class="rz"><h3>${esc(z.meta.name)} <small>${esc(z.meta.kinds_label || "通用")}</small></h3>
+      <div>${p ? `<b>【${esc(p.level)}】</b>${esc(p.text)}<br><small>参考 ${esc(ref?.time)} → 本次 ${esc(p.time)}</small>` : "只有参考照片，待复拍"}</div>
+      <div class="imgs"><img src="${await urlOf(z, ref?.files.orig)}">${p ? `<img src="${await urlOf(z, p.files.annot || p.files.aligned)}">` : ""}</div></div>`);
+  }
+  $("report").innerHTML = out.join("");
+}
+
+// ---------------------------------------------------------------- 事件
+async function open(files) {
+  for (const f of files) { try { await addZip(f); } catch (e) { alert(`${f.name}：${e.message}`); } }
+  if (!sel && zones.length) sel = [...zones].sort((a, b) => (RANK[b.last?.level] || 0) - (RANK[a.last?.level] || 0))[0];
+  render();
+}
+$("file").onchange = e => open([...e.target.files]);
+const drop = document.body;
+drop.addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("over"); });
+drop.addEventListener("dragleave", () => $("drop").classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("over"); open([...e.dataTransfer.files].filter(f => f.name.endsWith(".zip"))); });
+$("q").oninput = render;
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-f],[data-k],[data-n],[data-m]"); if (!t) return;
+  if (t.dataset.f) { filter = t.dataset.f; render(); }
+  else if (t.dataset.k) { sel = zones.find(z => z.key === t.dataset.k); selPhoto = null; render(); }
+  else if (t.dataset.n) { selPhoto = sel.photos.find(p => p.n === t.dataset.n); renderDetail(); }
+  else if (t.dataset.m) { mode = t.dataset.m; renderDetail(); }
+});
+$("print").onclick = async () => { await buildReport(); window.print(); };
+// 部署在服务器上时可以直接带参数打开：index.html?zip=exports/xxx.zip（可多个，用 | 分隔）
+const qz = new URLSearchParams(location.search).get("zip");
+if (qz) (async () => {
+  const files = [];
+  for (const u of qz.split("|")) { const r = await fetch(u); if (r.ok) files.push(new File([await r.blob()], decodeURIComponent(u.split("/").pop()))); }
+  open(files);
+})();
+if (typeof DecompressionStream === "undefined") $("drop").innerHTML += `<p style="color:var(--bad)">这个浏览器太旧，不支持解压。请用新版 Chrome、Edge、Safari 或 Firefox。</p>`;
+</script>
+</body>
+</html>

@@ -15,21 +15,28 @@ import com.fieldalign.camera.data.Outcome
 import com.fieldalign.camera.data.Repository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
 sealed class Screen {
     data object Home : Screen()
-    data class Camera(val zoneId: Long? = null) : Screen()
+    /** zoneId 非空：给指定测点复拍（拍完进对比页）；否则批量拍摄（mode 决定新建还是复拍，拍完不跳页）。 */
+    data class Camera(val zoneId: Long? = null, val mode: com.fieldalign.camera.data.CaptureMode = com.fieldalign.camera.data.CaptureMode.RESHOOT) : Screen()
+    data object Pending : Screen()
+    data object Settings : Screen()
+    data object Map : Screen()
+    /** 规划中的功能：说明页。 */
+    data class Planned(val title: String, val body: String) : Screen()
     data class ZoneDetail(val zoneId: Long) : Screen()
     data class Compare(val photoId: Long) : Screen()
-    /** 新建系列（file 为新照片），或把已有照片设为参考（existingPhotoId）。 */
+    /** 新建测点（file 为新照片），或把已有照片设为参考（existingPhotoId）。 */
     data class Register(
         val file: File,
         val markers: AlignEngine.Markers,
         val autoDots: List<AlignEngine.Dot>,
         val existingPhotoId: Long? = null,
-        /** 系列编号（二维码内容）：扫码锁定后拍全景时，照片里可能读不到码，用扫到的码。 */
+        /** 测点编号（二维码内容）：扫码锁定后拍全景时，照片里可能读不到码，用扫到的码。 */
         val qrText: String? = markers.qrText,
     ) : Screen()
     data class Unclassified(val outcome: Outcome.Unclassified) : Screen()
@@ -111,6 +118,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun assignToZone(file: File, zoneId: Long) = viewModelScope.launch {
         processing = true
+        repo.clearPending(file.absolutePath)
         val out = repo.process(file, zoneId)
         processing = false
         back()            // 关掉“未归类”页
@@ -122,7 +130,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         replaceTop(Screen.Register(u.file, u.markers, emptyList()))
     }
 
-    fun discard(file: File) { repo.discard(file); back(); continueQueue() }
+    fun discard(file: File) {
+        viewModelScope.launch { repo.clearPending(file.absolutePath) }
+        repo.discard(file); back(); continueQueue()
+    }
 
     fun saveRegister(r: Screen.Register, name: String, dots: List<AlignEngine.Dot>,
                      kinds: Set<com.fieldalign.camera.align.Defects.Kind> = emptySet()) = viewModelScope.launch {
@@ -131,7 +142,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             toast = "已设为参考照片"
             back()
         } else {
-            val zid = repo.createZone(name.ifBlank { r.qrText ?: "未命名系列" }, r.file, r.markers, dots, r.qrText, kinds = kinds)
+            repo.clearPending(r.file.absolutePath)
+            val zid = repo.createZone(name.ifBlank { r.qrText ?: "未命名测点" }, r.file, r.markers, dots, r.qrText, kinds = kinds)
             if (importQueue.isNotEmpty()) { back(); continueQueue() } else replaceTop(Screen.ZoneDetail(zid))
         }
     }
@@ -158,6 +170,59 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         go(Screen.Register(File(p.path), m, AlignEngine.selectReferenceDots(m), existingPhotoId = photoId))
     }
 
+    // ---------------------------------------------------------------- 批量拍摄
+    /** 批量建档时新测点的默认病害类型（相机页顶部可改）。 */
+    private val prefs = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+    var batchKinds by mutableStateOf(com.fieldalign.camera.align.Defects.parse(prefs.getString("batch_kinds", null)))
+    fun updateBatchKinds(k: Set<com.fieldalign.camera.align.Defects.Kind>) {
+        batchKinds = k; prefs.edit().putString("batch_kinds", com.fieldalign.camera.align.Defects.encode(k)).apply()
+    }
+    var batchQueued by mutableStateOf(0); private set
+    var batchCreated by mutableStateOf(0); private set
+    var batchMatched by mutableStateOf(0); private set
+    var batchPending by mutableStateOf(0); private set
+    /** 最近一张的结果（相机页底部一行提示）及其测点 id。 */
+    var batchLast by mutableStateOf<String?>(null); private set
+    var batchLastZone by mutableStateOf<Long?>(null); private set
+    private val batchLock = kotlinx.coroutines.sync.Mutex()
+
+    fun resetBatch() { batchCreated = 0; batchMatched = 0; batchPending = 0; batchLast = null; batchLastZone = null }
+
+    /** 批量拍摄：照片排队在后台逐张处理，相机可以接着拍。 */
+    fun onBatchCaptured(file: File, mode: com.fieldalign.camera.data.CaptureMode, loc: com.fieldalign.camera.data.GeoFix?,
+                        pose: com.fieldalign.camera.data.Pose?, forcedZoneId: Long? = null, newQr: String? = null) = viewModelScope.launch {
+        batchQueued++
+        val r = batchLock.withLock { repo.capture(file, mode, loc, pose, batchKinds, forcedZoneId, newQr) }
+        batchQueued--
+        when (r) {
+            is com.fieldalign.camera.data.Batch.Created -> { batchCreated++; batchLast = "已建档：${r.name}"; batchLastZone = r.zoneId }
+            is com.fieldalign.camera.data.Batch.Matched -> { batchMatched++; batchLastZone = r.zoneId
+                val lv = repo.db.photos().get(r.photoId)?.conclusion?.let { Regex("^【(.+?)】").find(it)?.groupValues?.get(1) }
+                batchLast = "已归入：${r.name}（${r.how}）" + (lv?.let { " · $it" } ?: "") }
+            is com.fieldalign.camera.data.Batch.Pending -> { batchPending++; batchLast = "待确认：${r.reason}"; batchLastZone = null }
+            is com.fieldalign.camera.data.Batch.Error -> { batchLast = r.message; batchLastZone = null }
+        }
+    }
+
+    /** 打开一张待确认照片：给出按 图像 + 距离 排好序的候选，由人选择归入或新建。 */
+    fun openPending(p: com.fieldalign.camera.data.Photo) = viewModelScope.launch {
+        processing = true
+        val loc = if (p.lat != null && p.lon != null) com.fieldalign.camera.data.GeoFix(p.lat, p.lon, p.locAcc ?: 30.0, p.takenAt) else null
+        val pose = p.pitch?.let { com.fieldalign.camera.data.Pose(p.azimuth, it) }
+        val out = repo.process(File(p.path), loc = loc, pose = pose, autoAssign = false)
+        processing = false
+        route(out)
+    }
+
+    /** 导出全部测点（电脑端后处理用）。 */
+    var exporting by mutableStateOf(false); private set
+    fun exportAll(onReady: (File) -> Unit) = viewModelScope.launch {
+        exporting = true
+        val f = runCatching { repo.exportAll() }.getOrNull()
+        exporting = false
+        if (f == null) toast = "没有可导出的测点" else onReady(f)
+    }
+
     // ---------------------------------------------------------------- 取景引导
     /** 为相机页准备引导目标（参考照片签名 + 参考二维码位置）。 */
     suspend fun guideTarget(zoneId: Long): Pair<FrameGuide.Target, String>? {
@@ -172,8 +237,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun zoneIdForQr(qr: String): Long? = repo.db.zones().byQr(qr)?.id
 
     /**
-     * 供相机页按画面特征自动识别系列的取景签名（低分辨率）。
-     * 有定位时只取附近的系列（以及还没有位置记录的老系列），远处背景相似的系列不参与，识别更快更准。
+     * 供相机页按画面特征自动识别测点的取景签名（低分辨率）。
+     * 有定位时只取附近的测点（以及还没有位置记录的老测点），远处背景相似的测点不参与，识别更快更准。
      */
     suspend fun guideCandidates(here: com.fieldalign.camera.data.GeoFix?): List<Pair<Long, AlignEngine.Signature>> {
         val r = com.fieldalign.camera.data.Geo.nearRadius(here?.acc)

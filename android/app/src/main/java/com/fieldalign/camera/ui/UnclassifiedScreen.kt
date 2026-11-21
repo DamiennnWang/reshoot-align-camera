@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.fieldalign.camera.AppViewModel
 import com.fieldalign.camera.data.Outcome
 
-/** 无码且无法唯一识别的照片：手动选系列、新建系列或丢弃。 */
+/** 无码且无法唯一识别的照片：手动选测点、新建测点或丢弃。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UnclassifiedScreen(vm: AppViewModel, u: Outcome.Unclassified) {
@@ -47,13 +47,14 @@ fun UnclassifiedScreen(vm: AppViewModel, u: Outcome.Unclassified) {
     val all by vm.repo.db.zones().summaries().collectAsState(initial = emptyList())
     val ranked = u.ranking.associate { it.first.id to it.second }
     val dist = u.distances
-    Scaffold(containerColor = Page, topBar = { AppTopBar("未能自动归类", "请选择系列，或新建", onBack = { vm.discard(u.file) }) }) { pad ->
+    Scaffold(containerColor = Page, topBar = { AppTopBar(if (u.fromPending) "待确认照片" else "未能自动归类", "请选择测点，或新建",
+        onBack = { if (u.fromPending) vm.back() else vm.discard(u.file) }) }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(12.dp)) {
             Text(u.message, fontWeight = FontWeight.Medium)
             Spacer(Modifier.padding(4.dp))
             bmp?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxWidth().heightIn(max = 320.dp), contentScale = ContentScale.Fit) }
             Spacer(Modifier.padding(6.dp))
-            Text(if (dist.isEmpty()) "归入已有系列（按特征相似度排序）：" else "归入已有系列（按特征相似度、距离排序）：",
+            Text(if (dist.isEmpty()) "归入已有测点（按图像相似度排序）：" else "归入已有测点（按图像相似度、距离排序）：",
                 fontSize = 14.sp, color = Muted)
             all.sortedWith(compareByDescending<com.fieldalign.camera.data.ZoneSummary> { (ranked[it.id] ?: 0) / 10 }
                 .thenBy { dist[it.id] ?: Double.MAX_VALUE }).forEach { z ->
@@ -75,7 +76,7 @@ fun UnclassifiedScreen(vm: AppViewModel, u: Outcome.Unclassified) {
                 OutlinedButton(onClick = { vm.discard(u.file) }, Modifier.weight(1f)) { Text("丢弃") }
                 Spacer(Modifier.width(12.dp))
                 Button(onClick = { vm.newSeriesFrom(u) }, Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Ink)) { Text("新建系列") }
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink)) { Text("新建测点") }
             }
         }
     }

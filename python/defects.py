@@ -17,6 +17,9 @@ import numpy as np
 
 LEVELS = ["无变化", "轻微", "明显", "建议重点关注"]
 F = 4                         # 面状检测在 1/4 分辨率上做
+ROUGH_SPALL = 1.1             # 纹理被替换且粗糙度增加 ≥10%：剥落/掉块
+SHADOW_SOFT = 18.0            # 明暗变化区边缘过渡宽于约 18 个 1/4 图像素（约 1.5 cm）：按阴影/光照处理，不算病害
+SHADOW = "阴影/光照变化"
 
 
 def _design(h, w, lref):
@@ -78,6 +81,9 @@ def areas(ref, al, valid_mask, change, mmpp_at=None, debug=None):
     white = (rL > tL) & (chroma_new < 20)
     rusty = (ra > max(5.0, 4 * sa)) & (rb > max(4.0, 3 * sb)) & (B[..., 1] - 128 > 6)
     tex = (ncc < 0.2) & (sdA > 3) & (np.abs(rL) > 0.5 * tL)          # 纹理被替换（剥落、涂层脱落、新物体）
+    rLs = cv2.GaussianBlur(rL.astype(np.float32), (0, 0), 1.0)
+    gx = cv2.Sobel(rLs, cv2.CV_32F, 1, 0, ksize=3) / 8; gy = cv2.Sobel(rLs, cv2.CV_32F, 0, 1, ksize=3) / 8
+    gmag = np.hypot(gx, gy)
     u = ((dark | white | rusty | tex) & m).astype(np.uint8) * 255
     u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     u = cv2.morphologyEx(u, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -99,8 +105,12 @@ def areas(ref, al, valid_mask, change, mmpp_at=None, debug=None):
         if (mm2 if mm2 is not None else area_px / 400) < 100:              # < 1 cm²（无比例时 < 2000 像素）不报
             continue
         f = lambda k: float(k[comp].mean())
+        # 粗糙度比：剥落露出骨料、断面更粗糙（>1）；泛碱、湿痕把原纹理盖住或保持（≤1）
+        rough = float(sdB[comp].mean()) / max(float(sdA[comp].mean()), 1.0)
         if f(rusty) >= 0.3:
             cls = "锈蚀"
+        elif f(tex) >= 0.25 and rough >= ROUGH_SPALL:
+            cls = "剥落/掉块"                                               # 新鲜断面可能比原表面更亮，不按明暗分
         elif f(white) >= 0.4:
             cls = "泛碱/白化"
         elif f(tex) >= 0.25:
@@ -109,6 +119,16 @@ def areas(ref, al, valid_mask, change, mmpp_at=None, debug=None):
             cls = "渗水/湿痕"
         else:
             cls = "表面变化"
+        # 阴影/光照：只是明暗变化（纹理没变）、边缘过渡很宽很软。湿痕、泛碱的边缘要硬得多
+        if cls in ("渗水/湿痕", "泛碱/白化", "表面变化") and f(tex) < 0.15:
+            ring = comp & ~(cv2.erode(comp.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
+            peak = float(np.percentile(np.abs(rLs[comp]), 90))
+            grad = float(np.median(gmag[ring])) if ring.any() else 0.0
+            soft = peak / max(grad, 1e-3)                                   # ≈ 边缘过渡宽度（1/4 图像素）
+            if debug is not None:
+                debug.setdefault("soft", []).append(round(soft, 1))
+            if soft > SHADOW_SOFT:
+                cls = SHADOW
         cs, _ = cv2.findContours(comp.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         out.append(Area(cls, (x * F, y * F, bw * F, bh * F), area_px, mm2, float(rL[comp].mean()),
                         max(cs, key=cv2.contourArea).reshape(-1, 2) * F))
@@ -231,6 +251,18 @@ def displacement(rg, ng, mask, mmpp_at=None, B=128, step=64, debug=None):
     return Disp(float(vv[0]), float(vv[1]), float(np.hypot(*vv)) * mmpp if mmpp else None,
                 opening * k_ if opening is not None else None, shear * k_ if shear is not None else None, len(best), box,
                 [cells[k] for k in best], float(raw[0]), float(raw[1]))
+
+
+IGNORE_CLS = ("剥落/掉块", "表面缺损", "锈蚀")
+
+
+def area_ignore(areas_, shape, pad=12):
+    """剥落、掉块、锈蚀区域（外扩 pad 像素）：断口边缘、锈痕看起来像裂缝，裂缝对比时这里不算新增/消失。"""
+    m = np.zeros(shape, np.uint8)
+    for a in areas_:
+        if a.cls in IGNORE_CLS and a.contour is not None and len(a.contour) >= 3:
+            cv2.fillPoly(m, [a.contour.astype(np.int32)], 255)
+    return cv2.dilate(m, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) if m.any() else m
 
 
 def compensate(al, d: Disp):

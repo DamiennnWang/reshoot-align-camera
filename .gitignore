@@ -12,3 +12,6 @@ real_data/
 宣传/blender/render/
 宣传/blender/tex/
 宣传/宣传片_*.mp4
+samples/export_demo/
+.claude/
+android/.kotlin/

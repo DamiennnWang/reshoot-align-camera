@@ -100,10 +100,10 @@ fun ZoneScreen(vm: AppViewModel, zoneId: Long) {
                                         clipData = android.content.ClipData.newRawUri("", uri)
                                         addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
-                                    ctx.startActivity(android.content.Intent.createChooser(i, "导出系列"))
+                                    ctx.startActivity(android.content.Intent.createChooser(i, "导出测点"))
                                 }
                             })
-                        DropdownMenuItem(text = { Text("删除整个系列") }, leadingIcon = { Icon(Icons.Default.Delete, null) },
+                        DropdownMenuItem(text = { Text("删除整个测点") }, leadingIcon = { Icon(Icons.Default.Delete, null) },
                             onClick = { menu = false; confirmDelete = true })
                     }
                 },
@@ -137,7 +137,7 @@ fun ZoneScreen(vm: AppViewModel, zoneId: Long) {
     if (renaming) {
         var name by remember { mutableStateOf(zone?.name ?: "") }
         AlertDialog(onDismissRequest = { renaming = false },
-            title = { Text("重命名系列") },
+            title = { Text("重命名测点") },
             text = { OutlinedTextField(name, { name = it }, singleLine = true) },
             confirmButton = { TextButton(onClick = { scope.launch { vm.repo.renameZone(zoneId, name) }; renaming = false }) { Text("保存") } },
             dismissButton = { TextButton(onClick = { renaming = false }) { Text("取消") } })
@@ -177,8 +177,8 @@ fun ZoneScreen(vm: AppViewModel, zoneId: Long) {
     }
     if (confirmDelete) {
         AlertDialog(onDismissRequest = { confirmDelete = false },
-            title = { Text("删除整个系列？") },
-            text = { Text("会删除这个系列的全部 ${photos.size} 张照片和对比结果，无法恢复。") },
+            title = { Text("删除整个测点？") },
+            text = { Text("会删除这个测点的全部 ${photos.size} 张照片和对比结果，无法恢复。") },
             confirmButton = { TextButton(onClick = {
                 confirmDelete = false
                 scope.launch { vm.repo.deleteZone(zoneId); vm.back() }
@@ -291,7 +291,7 @@ private fun TrendCard(trend: List<Photo>, ref: Photo?) {
     }
 }
 
-/** 系列结论：从参考到最近一次，裂缝总长、最大宽度的变化与月均增长。 */
+/** 测点结论：从参考到最近一次，裂缝总长、最大宽度的变化与月均增长。 */
 private fun seriesConclusion(photos: List<Photo>, refId: Long?): String? {
     val ref = photos.firstOrNull { it.id == refId } ?: return null
     val seq = photos.filter { it.id != refId && it.crackLenPx != null }.sortedBy { it.takenAt }
@@ -314,7 +314,7 @@ private fun seriesConclusion(photos: List<Photo>, refId: Long?): String? {
         "；最大宽度 ${f.fmtW(w0, mm)} → ${f.fmtW(w1, mm)}。判定：$trend。"
 }
 
-/** 系列概况：照片数、最近一次结果、位置（可在地图中打开）。 */
+/** 测点概况：照片数、最近一次结果、位置（可在地图中打开）。 */
 @Composable
 private fun SummaryCard(z: com.fieldalign.camera.data.Zone, count: Int, last: Photo?, series: String?) {
     val ctx = androidx.compose.ui.platform.LocalContext.current

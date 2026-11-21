@@ -41,17 +41,21 @@ object Analysis {
         lap("位移")
         val al2 = Defects.compensate(aligned, disp)
         val al2G = if (disp == null) alG else AlignEngine.gray(al2)
+        // 面状先做：剥落/掉块的断口边缘像裂缝，裂缝对比时排除这些区域
+        val areasAll = if (plan.area) Defects.areas(refWork, al2, cmpMask, c.changeMask, mmppAt) else emptyList()
+        val shadows = areasAll.filter { it.cls == Defects.SHADOW }
+        val areas = areasAll.filter { it.cls != Defects.SHADOW }
+        lap("面状")
         // 裂缝（变化图里去掉反光区）
         val m = Mat(); Core.compare(c.changeMask, Scalar(64.0), m, Core.CMP_NE); Core.bitwise_and(m, cmpMask, m)
-        val ch = if (plan.line) Measure.compare(refG.clone(), al2G.clone(), m) else null   // compare 会原地模糊输入
+        val ign = Defects.areaIgnore(areas, refWork.cols(), refWork.rows())
+        val ch = if (plan.line) Measure.compare(refG.clone(), al2G.clone(), m, ign) else null   // compare 会原地模糊输入
         lap("裂缝")
         val mmpp = scale?.let { s ->
             val ks = ch?.new?.cracks?.ifEmpty { ch.ref.cracks } ?: emptyList()
             if (ks.isEmpty()) s.mmPerPx(qrCenter ?: P(refWork.cols() / 2.0, refWork.rows() / 2.0))
             else s.mmPerPx(P(ks.sumOf { it.cx * it.lengthPx } / ks.sumOf { it.lengthPx }, ks.sumOf { it.cy * it.lengthPx } / ks.sumOf { it.lengthPx }))
         }
-        val areas = if (plan.area) Defects.areas(refWork, al2, cmpMask, c.changeMask, mmppAt) else emptyList()
-        lap("面状")
         val marks = if (plan.marks) Defects.marks(refWork, aligned, fullMask) else emptyList()
         val parts = if (plan.parts) Defects.parts(refG, al2G, c.changeMask, cmpMask) else emptyList()
         lap("部件")
@@ -89,6 +93,7 @@ object Analysis {
             val note = if (areas.any { it.cls == "渗水/湿痕" || it.cls == "泛碱/白化" }) "。渗水、泛碱按颜色明暗判断，也可能是阴影、潮湿或污渍，需人工确认" else ""
             sections.add("面状：$s$note")
         } else if (plan.area && !plan.general) sections.add("面状：未发现剥落、锈蚀、渗水、泛碱等面积变化（≥1 cm²）")
+        if (shadows.isNotEmpty()) sections.add("另有 ${shadows.size} 处大片柔和的明暗变化，边缘过渡很宽，判断为阴影或光照不同，未计入病害")
         if (plan.marks) {
             if (marks.isEmpty()) sections.add("螺栓：参考照片里没有找到防松标记线（建议用红色或黄色油漆在螺母和钢板上画一条直线）")
             else {

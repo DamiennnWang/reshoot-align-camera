@@ -104,6 +104,10 @@ interface PhotoDao {
     @Insert suspend fun insert(p: Photo): Long
     @Update suspend fun update(p: Photo)
     @Query("DELETE FROM photo WHERE id = :id") suspend fun delete(id: Long)
+    /** 待确认照片（批量复拍时没能归类的，zoneId = -1）。 */
+    @Query("SELECT * FROM photo WHERE zoneId = -1 ORDER BY takenAt DESC") fun pending(): Flow<List<Photo>>
+    @Query("DELETE FROM photo WHERE zoneId = -1 AND path = :path") suspend fun deletePending(path: String)
+    @Query("SELECT * FROM photo WHERE zoneId != -1") suspend fun allPhotos(): List<Photo>
 }
 
 @Database(entities = [Zone::class, Photo::class], version = 7, exportSchema = false)
