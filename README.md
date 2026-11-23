@@ -358,7 +358,6 @@ python3 -m venv ../.venv && ../.venv/bin/pip install -r requirements.txt
 
 ```bash
 git clone https://github.com/DamiennnWang/reshoot-align-camera.git && cd reshoot-align-camera
-git checkout feature/defect-kinds
 
 # 1. Python（3.9 以上，版本已锁定在 python/requirements.txt）
 python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt
