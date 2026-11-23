@@ -104,4 +104,47 @@ class BatchDeviceTest {
         assertTrue(entries.any { it.endsWith("/report.csv") } && entries.any { it.endsWith("_aligned.jpg") })
         db.close()
     }
+
+    /** 拍照（AUTO）模式：新位置自动建档、认识的自动归入、拿不准进待确认；编号对应表改名；靶标 PDF 可解码。 */
+    @Test
+    fun autoModeCodeMapTargets() = runBlocking {
+        File(target.filesDir, "code_map.json").delete()
+        val db2 = Room.inMemoryDatabaseBuilder(target, AppDb::class.java).build()
+        val repo2 = Repository(target, db2)
+        fun cp(name: String): File { val f = repo2.newPhotoFile(); Thread.sleep(3); AlignEngineDeviceTest.asset(name).copyTo(f, overwrite = true); return f }
+        val a = repo2.capture(cp("series/ref_B.jpg"), CaptureMode.AUTO, atB, Pose(10.0, 0.0), emptySet())
+        Log.i(TAG, "AUTO 第一张：$a")
+        assertTrue("库空：直接建档 $a", a is Batch.Created)
+        val b = repo2.capture(cp("series/B_new.jpg"), CaptureMode.AUTO, GeoFix(atB.lat + 0.0002, atB.lon, 10.0), Pose(15.0, 0.0), emptySet())
+        Log.i(TAG, "AUTO 复拍：$b")
+        assertTrue("附近认出：归入 $b", b is Batch.Matched && b.zoneId == (a as Batch.Created).zoneId)
+        val c = repo2.capture(cp("series/ref_C.jpg"), CaptureMode.AUTO, atC, Pose(10.0, 0.0), emptySet())
+        assertTrue("3 公里外的新位置：建档 $c", c is Batch.Created)
+        val d = repo2.capture(cp("series/B_new.jpg"), CaptureMode.AUTO, null, null, emptySet())
+        Log.i(TAG, "AUTO 无定位：$d")
+        assertTrue("没有定位又认不准：待确认，不重复建档 $d", d is Batch.Pending || d is Batch.Matched)
+        assertEquals(2, db2.zones().all().size)
+
+        // 编号对应：已建档的码改名；新码第一次拍到就用对应名称
+        val q = repo2.capture(cp("00_reference.jpg"), CaptureMode.AUTO, null, null, emptySet())
+        assertTrue(q is Batch.Created && q.name == "B01-Z023")
+        repo2.codeMap.put(com.fieldalign.camera.data.CodeMap.Entry("B01-Z023", project = "K3+120", name = "拱腰"))
+        assertEquals(1, repo2.applyCodeMap())
+        assertEquals("K3+120 拱腰", db2.zones().byQr("B01-Z023")!!.name)
+        assertEquals(2, repo2.codeMap.importCsv("\uFEFF编号,项目编号,名称,备注\nT0001,P-12,2#墩,\n\"T0002\",P-13,\"西侧,下部\",备注\n"))
+        assertEquals("P-13 西侧,下部", repo2.nameForQr("T0002"))
+        assertEquals("T0099", repo2.nameForQr("T0099"))
+
+        // 靶标：PDF 生成；预览图里的二维码能解出编号
+        val codes = com.fieldalign.camera.data.CodeMap.codes("T", 1, 7, 4)
+        val pdf = com.fieldalign.camera.data.TargetSheet.pdf(codes, File(target.cacheDir, "t.pdf"))
+        assertTrue(pdf.length() > 2000)
+        val bmp = com.fieldalign.camera.data.TargetSheet.preview("T0007", 800)
+        val px = IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
+        val txt = com.google.zxing.qrcode.QRCodeReader().decode(com.google.zxing.BinaryBitmap(
+            com.google.zxing.common.HybridBinarizer(com.google.zxing.RGBLuminanceSource(bmp.width, bmp.height, px)))).text
+        Log.i(TAG, "靶标 PDF ${pdf.length()} 字节，预览解码 $txt")
+        assertEquals("T0007", txt)
+        db2.close()
+    }
 }

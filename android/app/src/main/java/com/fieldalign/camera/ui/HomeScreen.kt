@@ -2,6 +2,7 @@ package com.fieldalign.camera.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.ChevronRight
@@ -37,6 +41,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -71,9 +77,10 @@ private fun levelOf(z: ZoneSummary) = z.lastConclusion?.let { Regex("^【(.+?)�
 
 /**
  * 首页：
- *  上 — 两个主入口：批量建档（每张一个新测点）、批量复拍（按码 / 位置 + 朝向 + 图像自动匹配）；
- *  中 — 功能格：待确认、导入、导出全部、电脑端处理、地图、巡检任务、云同步、设置（规划中的先占位）；
- *  下 — 需要关注 + 全部测点（搜索、筛选）。
+ *  顶部 — 标题 + 右上角「教程」「设置」；一个主按钮「拍照」（一张或多张都行，自动认测点 / 自动建档），
+ *         两个次要入口「复拍指定测点」「只建新测点」；
+ *  中部 — 概况（测点 / 需关注 / 待确认）+ 工具格（生成靶标、编号对应、导入、导出、电脑端、地图）+ 一行「即将推出」；
+ *  下部 — 需要关注 + 全部测点（搜索、筛选）。
  */
 @Composable
 fun HomeScreen(vm: AppViewModel) {
@@ -101,6 +108,8 @@ fun HomeScreen(vm: AppViewModel) {
         }
         ctx.startActivity(android.content.Intent.createChooser(i, "导出全部测点"))
     }
+    // 第一次打开：先看教程
+    androidx.compose.runtime.LaunchedEffect(Unit) { if (!vm.tutorialSeen) vm.go(Screen.Tutorial) }
     val attention = zones.filter { levelOf(it) in ATTENTION }
     val shown = zones.filter { z ->
         (query.isBlank() || z.name.contains(query, true) || (z.qrText?.contains(query, true) ?: false)) &&
@@ -110,56 +119,90 @@ fun HomeScreen(vm: AppViewModel) {
     LazyColumn(Modifier.fillMaxSize().background(Page), contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item(key = "header") {
-            Column(Modifier.fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Ink, InkSoft)), RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
-                .statusBarsPadding().padding(horizontal = 18.dp, vertical = 18.dp)) {
-                Text("复拍对齐相机", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text(if (zones.isEmpty()) "批量建档 · 复拍自动匹配 · 变化对比"
-                     else "${zones.size} 个测点 · ${zones.sumOf { it.photoCount }} 张照片" +
-                        (if (attention.isNotEmpty()) " · ${attention.size} 个需关注" else ""),
-                    color = Color(0xFFAAB6C3), fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionTile("批量建档", "每张一个新测点", Icons.Default.AddAPhoto, Amber, Ink, Modifier.weight(1f)) {
-                        vm.go(Screen.Camera(mode = CaptureMode.NEW))
+            Box(Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
+                .background(Brush.verticalGradient(listOf(Ink, InkSoft)))) {
+                HeroArt(Modifier.matchParentSize())
+                Column(Modifier.fillMaxWidth().statusBarsPadding().padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(top = 8.dp)) {
+                            Text("复拍对齐相机", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                            Text("同一处，隔段时间再拍，自动找出变化", color = Color(0xFFAAB6C3), fontSize = 13.sp)
+                        }
+                        IconButton(onClick = { vm.go(Screen.Tutorial) }) {
+                            Icon(Icons.AutoMirrored.Filled.HelpOutline, "教程", tint = Color.White)
+                        }
+                        IconButton(onClick = { vm.go(Screen.Settings) }) { Icon(Icons.Default.Settings, "设置", tint = Color.White) }
                     }
-                    ActionTile("批量复拍", "按码/位置自动匹配", Icons.Default.PhotoCamera, Color(0x26FFFFFF), Color.White, Modifier.weight(1f)) {
-                        vm.go(Screen.Camera(mode = CaptureMode.RESHOOT))
+                    Spacer(Modifier.height(18.dp))
+                    // 主按钮：拍照（不管一张还是一批）
+                    Row(Modifier.padding(end = 10.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Amber)
+                        .clickable { vm.go(Screen.Camera(mode = CaptureMode.AUTO)) }.padding(horizontal = 16.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(50.dp).background(Ink, CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.PhotoCamera, null, tint = Amber, modifier = Modifier.size(28.dp))
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("拍照", color = Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                            Text("一张或多张 · 自动认测点、自动建档", color = Ink.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = Ink)
                     }
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.padding(end = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        GhostButton("复拍指定测点", Icons.Default.Layers, Modifier.weight(1f)) { vm.go(Screen.PickZone) }
+                        GhostButton("只建新测点", Icons.Default.AddAPhoto, Modifier.weight(1f)) { vm.go(Screen.Camera(mode = CaptureMode.NEW)) }
+                    }
+                }
+            }
+        }
+        item(key = "stats") {
+            AppCard(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+                Row(Modifier.padding(vertical = 12.dp)) {
+                    Stat("${zones.size}", "测点", Ink, Modifier.weight(1f))
+                    Stat("${attention.size}", "需关注", if (attention.isNotEmpty()) Bad else Muted, Modifier.weight(1f)) {
+                        if (attention.isNotEmpty()) onlyAttention = true
+                    }
+                    Stat("${pending.size}", "待确认", if (pending.isNotEmpty()) Warn else Muted, Modifier.weight(1f)) { vm.go(Screen.Pending) }
                 }
             }
         }
         item(key = "grid") {
             Column(Modifier.padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FnTile("待确认", Icons.Default.Inbox, Modifier.weight(1f), badge = pending.size.takeIf { it > 0 }) { vm.go(Screen.Pending) }
+                    FnTile("生成靶标", Icons.Default.QrCode2, Modifier.weight(1f)) { vm.go(Screen.Targets) }
+                    FnTile("编号对应", Icons.AutoMirrored.Filled.ListAlt, Modifier.weight(1f)) { vm.go(Screen.CodeMap) }
                     FnTile("导入照片", Icons.Default.PhotoLibrary, Modifier.weight(1f)) { importPhotos() }
-                    FnTile(if (vm.exporting) "打包中…" else "导出全部", Icons.Default.Share, Modifier.weight(1f)) { if (!vm.exporting) vm.exportAll(share) }
-                    FnTile("电脑端处理", Icons.Default.Computer, Modifier.weight(1f)) {
-                        vm.go(Screen.Planned("电脑端后处理", PC_HELP))
-                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FnTile(if (vm.exporting) "打包中…" else "导出全部", Icons.Default.Share, Modifier.weight(1f)) { if (!vm.exporting) vm.exportAll(share) }
+                    FnTile("电脑端处理", Icons.Default.Computer, Modifier.weight(1f)) { vm.go(Screen.Planned("电脑端处理", PC_HELP)) }
                     FnTile("测点地图", Icons.Default.Map, Modifier.weight(1f)) { vm.go(Screen.Map) }
-                    FnTile("巡检任务", Icons.Default.Assignment, Modifier.weight(1f), planned = true) {
-                        vm.go(Screen.Planned("巡检任务", TASK_HELP))
+                }
+                // 规划中的功能：收在一行里，不占格子
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { vm.go(Screen.Planned("即将推出", SOON_HELP)) }
+                    .padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("即将推出", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.width(8.dp))
+                    listOf("巡检任务", "云端同步", "RTK 高精度定位").forEach {
+                        Text(it, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp)
+                            .border(1.dp, Hairline, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp))
                     }
-                    FnTile("云端同步", Icons.Default.CloudSync, Modifier.weight(1f), planned = true) {
-                        vm.go(Screen.Planned("云端同步", CLOUD_HELP))
-                    }
-                    FnTile("设置", Icons.Default.Settings, Modifier.weight(1f)) { vm.go(Screen.Settings) }
+                    Spacer(Modifier.weight(1f))
+                    Icon(Icons.Default.ChevronRight, null, tint = Color(0xFFB0B8C1), modifier = Modifier.size(18.dp))
                 }
             }
         }
         if (zones.isEmpty()) {
-            item(key = "guide") { GuideCard() }
+            item(key = "guide") { GuideCard(vm) }
         } else {
             if (attention.isNotEmpty() && !onlyAttention && query.isBlank()) {
                 item(key = "att_title") { SectionTitle("需要关注（${attention.size}）", Bad) }
                 items(attention.take(5), key = { "a${it.id}" }) { z -> ZoneRow(vm, z, Modifier.padding(horizontal = 14.dp)) }
             }
-            item(key = "title") { SectionTitle("全部测点（${zones.size}）", Muted) }
-            if (zones.size > 4) item(key = "search") {
+            item(key = "title") { SectionTitle(if (onlyAttention) "需要关注（${attention.size}）" else "全部测点（${zones.size}）", Muted) }
+            if (zones.size > 4 || onlyAttention) item(key = "search") {
                 Column(Modifier.padding(horizontal = 14.dp)) {
                     OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
                         placeholder = { Text("搜索测点名称或编号") }, singleLine = true,
@@ -183,48 +226,55 @@ private fun SectionTitle(s: String, c: Color) {
 }
 
 @Composable
-private fun ActionTile(title: String, sub: String, icon: ImageVector, bg: Color, fg: Color, modifier: Modifier, onClick: () -> Unit) {
-    Row(modifier.clip(RoundedCornerShape(16.dp)).background(bg).clickable(onClick = onClick).padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(38.dp).background(fg.copy(alpha = 0.14f), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = fg)
-        }
-        Spacer(Modifier.width(10.dp))
-        Column {
-            Text(title, color = fg, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-            Text(sub, color = fg.copy(alpha = 0.7f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+private fun GhostButton(title: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
+    Row(modifier.clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF)).border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(14.dp))
+        .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center) {
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
-/** 功能格：图标 + 名称；badge = 角标数字；planned = 规划中（灰色小字）。 */
 @Composable
-private fun FnTile(label: String, icon: ImageVector, modifier: Modifier, badge: Int? = null, planned: Boolean = false, onClick: () -> Unit) {
-    Column(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White).clickable(onClick = onClick).padding(vertical = 12.dp),
+private fun Stat(value: String, label: String, color: Color, modifier: Modifier, onClick: (() -> Unit)? = null) {
+    Column(modifier.clip(RoundedCornerShape(10.dp)).let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, color = color, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Muted, fontSize = 12.sp)
+    }
+}
+
+/** 功能格：图标 + 名称（一行，格子等高）；badge = 角标数字。 */
+@Composable
+private fun FnTile(label: String, icon: ImageVector, modifier: Modifier, badge: Int? = null, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White).clickable(onClick = onClick).padding(vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
-            Icon(icon, null, tint = if (planned) Color(0xFFA0AAB4) else Ink, modifier = Modifier.size(26.dp))
-            if (badge != null) Box(Modifier.align(Alignment.TopEnd).padding(start = 18.dp).size(18.dp).background(Bad, CircleShape),
+            Box(Modifier.size(40.dp).background(Page, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = Ink, modifier = Modifier.size(22.dp))
+            }
+            if (badge != null) Box(Modifier.align(Alignment.TopEnd).size(18.dp).background(Bad, CircleShape),
                 contentAlignment = Alignment.Center) {
                 Text(if (badge > 99) "99" else "$badge", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text(label, fontSize = 12.sp, color = if (planned) Muted else Ink, textAlign = TextAlign.Center, maxLines = 1)
-        Text(if (planned) "规划中" else " ", fontSize = 9.sp, color = Color(0xFFA0AAB4))     // 占一行，格子等高
+        Text(label, fontSize = 13.sp, color = Ink, textAlign = TextAlign.Center, maxLines = 1)
     }
 }
 
-/** 首次使用：怎么用。 */
+/** 还没有测点：三步上手。 */
 @Composable
-private fun GuideCard() {
+private fun GuideCard(vm: AppViewModel) {
     AppCard(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
         Column(Modifier.padding(18.dp)) {
-            Text("怎么用", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+            Text("三步上手", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
             Spacer(Modifier.height(12.dp))
-            Step(1, "第一次：批量建档", "点「批量建档」，一个测点拍一张，每张自动建一个测点（记下位置和镜头朝向）。有二维码的按码命名。")
-            Step(2, "下次：批量复拍", "点「批量复拍」，按半透明参考对准拍。有码按码归档；无码按 位置 + 朝向 缩小范围，再用图像确认。")
-            Step(3, "认不出的进「待确认」", "附近有多个相似测点、或没有定位时不会乱归，回来在「待确认」里点一下归入或新建。", last = true)
+            Step(1, "贴靶标（可选）", "「生成靶标」打印编号二维码，贴在裂缝旁。有编号最准，还能换算毫米。")
+            Step(2, "点「拍照」", "对准拍一张就是一个测点；一处接一处连着拍也行。")
+            Step(3, "下次再点「拍照」", "自动认出是哪个测点，叠加上次的照片帮你对准，拍完自动对比、标出变化。", last = true)
+            TextButton(onClick = { vm.go(Screen.Tutorial) }, modifier = Modifier.padding(top = 4.dp)) { Text("看图文教程") }
         }
     }
 }
@@ -244,9 +294,9 @@ private fun Step(n: Int, title: String, body: String, last: Boolean = false) {
 }
 
 @Composable
-fun ZoneRow(vm: AppViewModel, z: ZoneSummary, modifier: Modifier) {
+fun ZoneRow(vm: AppViewModel, z: ZoneSummary, modifier: Modifier, onClick: (() -> Unit)? = null) {
     val thumb = rememberBitmap(z.refPath) { z.refPath?.let { vm.loadBitmap(it, 300) } }
-    AppCard(modifier.fillMaxWidth(), onClick = { vm.go(Screen.ZoneDetail(z.id)) }) {
+    AppCard(modifier.fillMaxWidth(), onClick = onClick ?: { vm.go(Screen.ZoneDetail(z.id)) }) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(78.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFDDE1E6))) {
                 thumb?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
@@ -280,28 +330,32 @@ fun ZoneRow(vm: AppViewModel, z: ZoneSummary, modifier: Modifier) {
     }
 }
 
-const val PC_HELP = """手机上只给大致判断；需要精细分析、出正式报告时，在电脑上处理：
+const val PC_HELP = """手机上给现场判断；需要复核、出正式报告时，在电脑上处理：
 
 1. 首页「导出全部」（或测点页菜单「导出」），把 ZIP 发到电脑（微信、数据线、网盘都行）。
-2. 用浏览器打开项目里的 web/index.html，把 ZIP 拖进去：按测点查看前后对比（滑动对照）、标注图、病害明细，可以筛选需关注的测点、打印成 PDF 报告。不上传任何数据，离线可用。
-3. 需要重新分析（更高分辨率、调阈值）时，在电脑上运行：
-   python python/report.py 导出包.zip
-   会生成带统计的 HTML 报告。
+2. 电脑浏览器打开配套网站的「导出包查看器」，把 ZIP 拖进去：前后对比滑块、标注图、病害明细、筛选需关注的测点、打印 PDF 报告。ZIP 只在浏览器里打开，不上传。
+3. 需要重新分析（调阈值、批量出报告）：网站「在线处理」上传 ZIP；或下载电脑端工具包，运行
+   python report.py 导出包.zip
+4. 网站上还能批量生成靶标、查看测试图片。
 
-以后可以把这个网页部署到服务器或云上，手机直接上传、团队共享（规划中）。"""
+没有网络时：工具包里的「查看器.html」双击打开即可，功能和网站上的查看器一样。"""
 
-const val TASK_HELP = """规划中：
+const val SOON_HELP = """以下功能正在规划：
 
-· 按路线/区段建巡检任务，列出这次要复拍的测点，现场逐个打勾；
-· 到点自动提醒（按定位），漏拍的测点在任务结束时提示；
+巡检任务
+· 按路线 / 区段建任务，列出这次要复拍的测点，现场逐个打勾；
+· 到点按定位提醒，漏拍的测点在任务结束时提示；
 · 任务完成后一键导出这次的全部结果。
 
-目前可以先用「批量复拍」+ 首页的「需要关注」「待复拍」完成同样的工作。"""
-
-const val CLOUD_HELP = """规划中：
-
+云端同步
 · 测点档案和照片同步到服务器（自建或云），多人、多台手机共用同一批测点；
-· 电脑端网页直接读取，不用再手动导出 ZIP；
-· 照片只上传压缩后的对比图和明细数据，原图按需上传，节省流量。
+· 电脑端网站直接读取，不用再手动导出 ZIP；
+· 只上传压缩后的对比图和明细数据，原图按需上传，节省流量。
 
-目前请用首页「导出全部」+ 电脑端网页处理。"""
+RTK 高精度定位
+· 蓝牙连接北斗 RTK 接收机 + 网络差分（CORS），测点位置精确到 1–2 厘米；
+· 适合测点密集、外观相似、没法贴二维码的场景。
+普通场景用二维码 + 手机定位就够了。"""
+
+const val TASK_HELP = SOON_HELP
+const val CLOUD_HELP = SOON_HELP

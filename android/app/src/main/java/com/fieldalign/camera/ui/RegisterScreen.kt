@@ -58,7 +58,7 @@ fun RegisterScreen(vm: AppViewModel, r: Screen.Register) {
     val selected = remember { mutableStateListOf<Int>().apply {
         addAll(r.autoDots.mapNotNull { d -> cands.indexOfFirst { it.x == d.x && it.y == d.y }.takeIf { it >= 0 } })
     } }
-    var name by remember { mutableStateOf(r.qrText ?: "测点 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date())) }
+    var name by remember { mutableStateOf(r.qrText?.let { vm.repo.nameForQr(it) } ?: "测点 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date())) }
     val isNew = r.existingPhotoId == null
     var kinds by remember { mutableStateOf(com.fieldalign.camera.align.Defects.fromQr(r.qrText)) }
     val hasQr = m.qrText != null

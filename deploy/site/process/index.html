@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在线处理 · 复拍对齐相机</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); margin: 14px 0 16px; }
+.tabs button { border: 0; background: none; font: inherit; padding: 8px 14px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--amber); font-weight: 600; }
+.pane { display: none; } .pane.on { display: block; }
+.drops { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.drop { position: relative; border: 2px dashed var(--line); border-radius: 12px; background: var(--card); min-height: 190px; display: grid; place-items: center; text-align: center; padding: 12px; cursor: pointer; overflow: hidden; }
+.drop:hover, .drop.over { border-color: var(--amber); }
+.drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.drop .lab { position: absolute; left: 8px; top: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; border-radius: 6px; padding: 1px 8px; z-index: 1; }
+.drop input { display: none; }
+.opts { margin: 14px 0; display: flex; gap: 14px 18px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+.opts label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+.opts input[type=number] { width: 80px; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); }
+.status { margin-top: 14px; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--amber); border-radius: 50%; animation: r 0.8s linear infinite; vertical-align: -2px; }
+@keyframes r { to { transform: rotate(360deg); } }
+.res { margin-top: 16px; display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+.res .txt { white-space: pre-wrap; font-size: 14px; }
+.res ul { padding-left: 18px; margin: 6px 0; font-size: 14px; }
+.views .vt { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.views .vt button { font-size: 13px; padding: 4px 10px; }
+.views .vt button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.views img { border-radius: 10px; border: 1px solid var(--line); width: 100%; }
+.warn { color: var(--warn); font-size: 13px; }
+.err { color: var(--bad); }
+.log { max-height: 220px; overflow: auto; font-size: 13px; }
+@media (max-width: 760px) { .drops, .res { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <a class="brand" href="/"><i></i>复拍对齐相机</a>
+  <nav><a href="/">首页</a><a href="/samples/">测试图片</a><a class="on" href="/process/">在线处理</a><a href="/targets/">靶标</a><a href="/viewer/">导出包查看器</a><a href="/download/">下载</a></nav>
+</div></header>
+<main>
+  <h1>在线处理</h1>
+  <p class="muted">在服务器上运行和手机相同的算法。上传的文件只用于这次分析，24 小时后自动删除。</p>
+  <div class="tabs"><button class="on" data-p="pair">两张照片对比</button><button data-p="zip">导出包生成报告</button></div>
+
+  <section class="pane on" id="pair">
+    <div class="drops">
+      <label class="drop" id="dref"><span class="lab">参考（上次）</span><span class="muted">点击或拖入上次拍的照片</span><input type="file" accept="image/*"></label>
+      <label class="drop" id="dnew"><span class="lab">本次</span><span class="muted">点击或拖入这次拍的照片</span><input type="file" accept="image/*"></label>
+    </div>
+    <div class="opts">
+      <span class="muted">只分析：</span>
+      <label><input type="checkbox" value="crack">裂缝</label>
+      <label><input type="checkbox" value="spall">剥落/掉块</label>
+      <label><input type="checkbox" value="seep">渗水</label>
+      <label><input type="checkbox" value="effl">泛碱</label>
+      <label><input type="checkbox" value="rust">锈蚀</label>
+      <span class="muted small">（都不选 = 通用，全部分析）</span>
+      <label>裂缝延长至少 <input type="number" id="grow1" min="0" step="1" placeholder="自动"> mm 才算</label>
+    </div>
+    <div class="row"><button class="btn pri" id="go1">开始对比</button><span class="muted small" id="hint1">照片里有靶标二维码时最准（自动比例尺）；没有也能对齐，但没有毫米尺寸。</span></div>
+    <div class="status" id="st1"></div>
+    <div id="out1"></div>
+  </section>
+
+  <section class="pane" id="zip">
+    <label class="drop" id="dzip" style="min-height:150px"><span class="lab">导出包 ZIP</span><span class="muted">点击或拖入手机「导出」或「导出全部」生成的 ZIP</span><input type="file" accept=".zip,application/zip"></label>
+    <div class="opts">
+      <label>裂缝延长至少 <input type="number" id="grow2" min="0" step="1" placeholder="自动"> mm 才算</label>
+      <a class="small" href="/samples/export_demo/全部测点_demo.zip">没有导出包？先下载示例（29 MB）</a>
+    </div>
+    <div class="row"><button class="btn pri" id="go2">上传并生成报告</button><span class="muted small">每个测点取最近一次复拍重新分析裂缝和面状病害；位移、螺栓、部件沿用手机结果。</span></div>
+    <div class="status" id="st2"></div>
+  </section>
+</main>
+<footer>复拍对齐相机 · 在线处理</footer>
+<script>
+const $ = s => document.querySelector(s);
+const COLOR = {"无变化":"#22a06b","稳定":"#22a06b","无裂缝":"#22a06b","轻微":"#2f80ed","明显":"#e08a00","延长":"#e08a00","变宽":"#e08a00","无法对齐":"#6b7785"};
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const badge = lv => `<span class="lv" style="background:${COLOR[lv] || "#d64545"}">${esc(lv)}</span>`;
+const key = new URLSearchParams(location.search).get("key") || "";
+const api = p => p + (key ? (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(key) : "");
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".pane").forEach(x => x.classList.toggle("on", x.id === b.dataset.p));
+});
+
+const picked = { ref: null, new: null, zip: null }, sample = { ref: null, new: null };
+function setupDrop(el, slot, isImg) {
+  const inp = el.querySelector("input");
+  const show = (file, url) => {
+    picked[slot] = file; if (file) sample[slot] = null;
+    el.querySelectorAll("img").forEach(i => i.remove());
+    const m = el.querySelector(".muted");
+    if (isImg && (file || url)) { const im = new Image(); im.src = url || URL.createObjectURL(file); el.appendChild(im); }
+    else if (file) m.textContent = `${file.name}（${(file.size / 1048576).toFixed(1)} MB）`;
+  };
+  inp.onchange = () => inp.files[0] && show(inp.files[0]);
+  el.ondragover = e => { e.preventDefault(); el.classList.add("over"); };
+  el.ondragleave = () => el.classList.remove("over");
+  el.ondrop = e => { e.preventDefault(); el.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) show(f); };
+  return show;
+}
+const showRef = setupDrop($("#dref"), "ref", true), showNew = setupDrop($("#dnew"), "new", true);
+setupDrop($("#dzip"), "zip", false);
+
+// 从测试图片页跳过来：?ref=samples/...&new=samples/...
+const q = new URLSearchParams(location.search);
+if (q.get("ref") && q.get("new")) {
+  sample.ref = q.get("ref"); sample.new = q.get("new");
+  showRef(null, "/" + sample.ref); showNew(null, "/" + sample.new);
+  $("#hint1").textContent = "已选好测试图片" + (q.get("title") ? "「" + q.get("title") + "」" : "") + "，点「开始对比」。";
+}
+
+async function poll(id, st, onDone) {
+  for (;;) {
+    const r = await fetch(api("/api/jobs/" + id)); const j = await r.json();
+    if (j.state === "done") return onDone(j);
+    if (j.state === "error" || j.error) { st.innerHTML = `<span class="err">处理失败：${esc(j.error)}</span>`; return; }
+    const last = j.log && j.log.length ? j.log[j.log.length - 1] : "";
+    st.innerHTML = `<span class="spin"></span> ${j.state === "queued" ? `排队中${j.ahead ? `（前面还有 ${j.ahead} 个）` : ""}` : "处理中"}… <span class="muted small">${esc(last)}</span>`;
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
+
+$("#go1").onclick = async () => {
+  const st = $("#st1"); $("#out1").innerHTML = "";
+  if (!(picked.ref || sample.ref) || !(picked.new || sample.new)) { st.innerHTML = `<span class="err">请先选好两张照片。</span>`; return; }
+  const fd = new FormData();
+  for (const k of ["ref", "new"]) picked[k] ? fd.append(k, picked[k]) : fd.append(k + "_sample", sample[k]);
+  fd.append("kinds", [...document.querySelectorAll("#pair .opts input[type=checkbox]:checked")].map(x => x.value).join(","));
+  const g = $("#grow1").value;
+  $("#go1").disabled = true; st.innerHTML = `<span class="spin"></span> 上传中…`;
+  try {
+    const r = await fetch(api("/api/pair" + (g ? "?grow_mm=" + g : "")), { method: "POST", body: fd });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status);
+    await poll(j.id, st, job => {
+      const x = job.result; st.innerHTML = "";
+      const imgs = x.images || [];
+      $("#out1").innerHTML = `<div class="res">
+        <div class="card"><div class="row" style="margin-bottom:6px"><b>结论</b>${badge(x.level)}</div>
+          <div class="txt">${esc(x.text)}</div>
+          ${x.items && x.items.length ? `<ul>${x.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
+          ${(x.warnings || []).map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
+          <div class="muted small" style="margin-top:8px">对齐方式：${esc(x.how)}<br>${esc(x.message || "")}</div></div>
+        <div class="views"><div class="vt">${imgs.map((m, i) => `<button class="btn ${i ? "" : "on"}" data-u="${m.url}">${esc(m.label)}</button>`).join("")}</div>
+          ${imgs.length ? `<a href="${imgs[0].url}" target="_blank"><img id="vimg" src="${imgs[0].url}" alt="结果图"></a>` : ""}
+          <div class="muted small" style="margin-top:6px">标注：红/彩色线 = 裂缝（新增部分加粗），框 = 面状病害。变化：红 = 结构变化，蓝 = 明暗变化。</div></div></div>`;
+      document.querySelectorAll(".views .vt button").forEach(b => b.onclick = () => {
+        document.querySelectorAll(".views .vt button").forEach(x => x.classList.toggle("on", x === b));
+        $("#vimg").src = b.dataset.u; $("#vimg").parentElement.href = b.dataset.u;
+      });
+    });
+  } catch (e) { st.innerHTML = `<span class="err">出错了：${esc(e.message)}</span>`; }
+  $("#go1").disabled = false;
+};
+
+$("#go2").onclick = () => {
+  const st = $("#st2"), f = picked.zip;
+  if (!f) { st.innerHTML = `<span class="err">请先选择 ZIP。</span>`; return; }
+  const g = $("#grow2").value;
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", api(`/api/report?name=${encodeURIComponent(f.name)}` + (g ? "&grow_mm=" + g : "")));
+  xhr.setRequestHeader("Content-Type", "application/zip");
+  xhr.upload.onprogress = e => { if (e.lengthComputable) st.innerHTML = `<span class="spin"></span> 上传中 ${Math.round(e.loaded / e.total * 100)}%`; };
+  xhr.onerror = () => { st.innerHTML = `<span class="err">上传失败，请检查网络。</span>`; $("#go2").disabled = false; };
+  xhr.onload = async () => {
+    let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status !== 200) { st.innerHTML = `<span class="err">${esc(j.error || "上传失败 " + xhr.status)}</span>`; $("#go2").disabled = false; return; }
+    await poll(j.id, st, job => {
+      const r = job.result;
+      st.innerHTML = `<div class="card"><div class="row"><b>报告已生成</b><span class="muted small">${job.log.length} 个测点 · 保留 24 小时</span></div>
+        <div class="row" style="margin-top:10px"><a class="btn pri" href="${r.report}" target="_blank">打开报告</a>
+        <a class="btn" href="/viewer/?zip=${encodeURIComponent(r.zip)}" target="_blank">在查看器中打开导出包</a></div>
+        <pre class="log">${job.log.map(esc).join("\n")}</pre></div>`;
+    });
+    $("#go2").disabled = false;
+  };
+  $("#go2").disabled = true; xhr.send(f);
+};
+</script>
+</body>
+</html>

@@ -102,6 +102,10 @@ fun AppRoot(vm: AppViewModel, hasCamera: Boolean, requestCamera: () -> Unit) {
             is Screen.Settings -> com.fieldalign.camera.ui.SettingsScreen(vm)
             is Screen.Map -> com.fieldalign.camera.ui.MapScreen(vm)
             is Screen.Planned -> com.fieldalign.camera.ui.PlannedScreen(vm, s.title, s.body)
+            is Screen.Targets -> com.fieldalign.camera.ui.TargetsScreen(vm)
+            is Screen.CodeMap -> com.fieldalign.camera.ui.CodeMapScreen(vm)
+            is Screen.Tutorial -> com.fieldalign.camera.ui.TutorialScreen(vm)
+            is Screen.PickZone -> com.fieldalign.camera.ui.PickZoneScreen(vm)
         }
         if (vm.processing) {
             Box(Modifier.fillMaxSize().padding(0.dp), contentAlignment = Alignment.Center) {

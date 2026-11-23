@@ -49,8 +49,9 @@ def zones_in(z: zipfile.ZipFile):
             yield n[:-len("zone.json")]
 
 
-def analyze(ref_full, aligned, kinds: set, grow_mm: float | None):
-    """ref_full：参考原图；aligned：已对齐到参考工作坐标的本次照片。返回 (等级, 结论, 标注图, 明细)。"""
+def analyze(ref_full, aligned, kinds: set, grow_mm: float | None, cmp_mask=None, change=None):
+    """ref_full：参考原图；aligned：已对齐到参考工作坐标的本次照片；cmp_mask：可选的比较区域（对齐时得到的一致区）。
+    返回 (等级, 结论, 标注图, 明细)。"""
     h, w = aligned.shape[:2]
     ref = cv2.resize(ref_full, (w, h), interpolation=cv2.INTER_AREA)
     valid = cv2.erode((fa.gray_of(aligned) > 3).astype(np.uint8) * 255, np.ones((15, 15), np.uint8))
@@ -62,8 +63,10 @@ def analyze(ref_full, aligned, kinds: set, grow_mm: float | None):
         scale = ms.scale_from_qr(rm.qr_corners, ms.qr_size_mm(rm.qr_text))
     mmpp_at = scale.mm_per_px if scale else None
     mmpp = mmpp_at((w / 2, h / 2)) if scale else None
+    if cmp_mask is not None:
+        mask &= cmp_mask
     general = not kinds
-    change = np.zeros((h, w), np.uint8)
+    change = np.zeros((h, w), np.uint8) if change is None else change
     areas = dfx.areas(ref, aligned, mask, change, mmpp_at) if (general or kinds & AREA) else []
     real = [a for a in areas if a.cls != dfx.SHADOW]
     parts, items, sev = [], [], 0
@@ -90,7 +93,8 @@ def analyze(ref_full, aligned, kinds: set, grow_mm: float | None):
         by = {}
         for a in real:
             by.setdefault(a.cls, []).append(a.mm2 or 0)
-        parts.append("面状：" + "；".join(f"{k} {len(v)} 处，共约 {sum(v) / 100:.1f} cm²" for k, v in by.items()))
+        # 有面状病害、裂缝没有发展：面状结论放第一行
+        parts.insert(0 if level in ("无裂缝", "稳定") else len(parts), "面状：" + "；".join(f"{k} {len(v)} 处，共约 {sum(v) / 100:.1f} cm²" for k, v in by.items()))
     if len(real) < len(areas):
         parts.append(f"另有 {len(areas) - len(real)} 处柔和的明暗变化，判断为阴影/光照，未计入")
     if not (kinds == {"crack"} and level):
@@ -98,16 +102,44 @@ def analyze(ref_full, aligned, kinds: set, grow_mm: float | None):
     return level, "\n".join(parts) or "未发现变化", out, items
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("zips", nargs="+")
-    ap.add_argument("-o", "--out")
-    ap.add_argument("--grow-mm", type=float, default=None, help="裂缝新增至少多少毫米才算延长/新增（默认约 40 像素）")
-    a = ap.parse_args()
-    out = a.out or os.path.splitext(a.zips[0])[0] + "_报告"
+KIND_CODES = LINE | AREA | {"joint", "offset", "bolt", "part"}
+
+
+def pair(ref_img, new_img, kinds: set = frozenset(), grow_mm: float | None = None):
+    """两张照片直接对比（网页“在线处理”用）：对齐 → 裂缝 + 面状病害。
+    返回 dict(ok, how, level, text, items, warnings) 和图像 dict(aligned, marked, changes)。"""
+    rm = fa.detect_markers(ref_img)
+    nm = fa.detect_markers(new_img)
+    dots = fa.select_reference_dots(rm) if rm.qr_corners is not None else []
+    if rm.qr_corners is not None and nm.qr_corners is not None:
+        res, ref_w, new_w = fa.align(ref_img, rm, dots, new_img, nm)
+        how = "二维码靶标 + 图像特征"
+    else:
+        res, ref_w, new_w = fa.align_features_only(ref_img, new_img)
+        how = "图像特征（没有找到两张都有的二维码）"
+    info = dict(how=how, status=getattr(res, "status", ""), message=getattr(res, "message", ""))
+    if res.H is None:
+        return dict(ok=False, level="无法对齐", text="两张照片对不上：请确认是同一位置，重叠足够多。", items=[], warnings=[], **info), {}
+    size = (ref_w.shape[1], ref_w.shape[0])
+    aligned, valid = fa.warp_to_ref(new_w, res, size)
+    excl = fa.comparison_mask(size, res, rm.qr_corners if rm.qr_corners is not None else None, dots)
+    cmp_res, change, _ = fa.compare(ref_w, aligned, valid, excl, res_ratio=fa.resolution_ratio(res))
+    cm = ((excl > 0) & (valid > 0) & (change != 64)).astype(np.uint8) * 255
+    level, text, marked, items = analyze(ref_img, aligned, set(kinds) & (LINE | AREA), grow_mm, cm, change)
+    views = fa.make_views(ref_w, aligned, valid, change, cmp_res.regions, cmp_res.light_regions)
+    imgs = dict(ref=ref_w, aligned=aligned, marked=marked)
+    imgs.update({k: v for k, v in views.items() if k in ("changes", "checker")})
+    warn = [str(w) for w in (fa.quality_warnings(cmp_res, new_w) or [])]
+    if set(kinds) - LINE - AREA:
+        warn.append("位移、螺栓、部件需要在手机上分析（电脑端暂不支持），这里只做了裂缝和面状病害。")
+    return dict(ok=True, level=level, text=text, items=items, warnings=warn, **info), imgs
+
+
+def build_report(zips, out: str, grow_mm: float | None = None, log=print) -> str:
+    """把一个或多个导出 ZIP 生成 HTML 报告，返回 index.html 路径。"""
     os.makedirs(os.path.join(out, "img"), exist_ok=True)
     rows = []
-    for zp in a.zips:
+    for zp in zips:
         with zipfile.ZipFile(zp) as z:
             for d in zones_in(z):
                 meta = json.loads(z.read(d + "zone.json").decode("utf-8"))
@@ -125,7 +157,7 @@ def main():
                 if last:
                     p = last[-1]
                     al = imread(z, d + p["对齐图"])
-                    lv, txt, img, items = analyze(ref_full, al, kinds, a.grow_mm)
+                    lv, txt, img, items = analyze(ref_full, al, kinds, grow_mm)
                     if kinds - LINE - AREA:          # 位移、螺栓、部件：电脑端暂不重算，沿用手机结果（取两者中较重的等级）
                         img = imread(z, d + p["标注图"]) if p["标注图"] else img
                         if RANK.get(p["判定等级"], 0) > RANK.get(lv, 0) or not (kinds & (LINE | AREA)):
@@ -133,15 +165,15 @@ def main():
                         txt = ("" if not (kinds & (LINE | AREA)) else txt + "\n") + "位移/螺栓/部件：沿用手机结果——" + p["文字结论"]
                     cv2.imwrite(os.path.join(out, "img", f"{tag}_pc.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88])
                     entry.update(time=p["拍摄时间"], app_level=p["判定等级"], app_text=p["文字结论"], level=lv, text=txt, items=items)
-                    print(f"{meta.get('name')}：手机【{p['判定等级']}】 电脑【{lv}】")
+                    log(f"{meta.get('name')}：手机【{p['判定等级']}】 电脑【{lv}】")
                 else:
-                    print(f"{meta.get('name')}：只有参考照片")
+                    log(f"{meta.get('name')}：只有参考照片")
                 rows.append(entry)
     rows.sort(key=lambda r: -RANK.get(r.get("level"), 0))
     e = html.escape
     def badge(lv):
         return f'<span class="lv" style="background:{COLOR.get(lv, "#d64545" if lv else "#6b7785")}">{e(lv or "待复拍")}</span>'
-    body = [f"<h1>复拍对比报告</h1><p class='m'>{datetime.now():%Y-%m-%d %H:%M} · {len(rows)} 个测点 · 来源 {e(', '.join(map(os.path.basename, a.zips)))}</p>",
+    body = [f"<h1>复拍对比报告</h1><p class='m'>{datetime.now():%Y-%m-%d %H:%M} · {len(rows)} 个测点 · 来源 {e(', '.join(map(os.path.basename, zips)))}</p>",
             "<table><tr><th>测点</th><th>类型</th><th>本次</th><th>电脑复核</th><th>手机结论</th></tr>"]
     for r in rows:
         body.append(f"<tr><td><a href='#z{r['tag']}'>{e(r['name'])}</a></td><td>{e(r['kinds'])}</td><td>{e(r.get('time', '—'))}</td>"
@@ -168,7 +200,17 @@ def main():
     with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
         f.write(f"<!doctype html><html lang='zh-CN'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
                 f"<title>复拍对比报告</title><style>{css}</style><body>{''.join(body)}</body></html>")
-    print(f"\n报告：{os.path.join(out, 'index.html')}")
+    return os.path.join(out, "index.html")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("zips", nargs="+")
+    ap.add_argument("-o", "--out")
+    ap.add_argument("--grow-mm", type=float, default=None, help="裂缝新增至少多少毫米才算延长/新增（默认约 40 像素）")
+    a = ap.parse_args()
+    out = a.out or os.path.splitext(a.zips[0])[0] + "_报告"
+    print(f"\n报告：{build_report(a.zips, out, a.grow_mm)}")
 
 
 if __name__ == "__main__":

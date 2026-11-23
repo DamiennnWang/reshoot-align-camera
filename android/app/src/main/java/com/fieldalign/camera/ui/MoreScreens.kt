@@ -3,6 +3,10 @@ package com.fieldalign.camera.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -114,7 +118,17 @@ fun SettingsScreen(vm: AppViewModel) {
     Scaffold(containerColor = Page, topBar = { AppTopBar("设置", onBack = { vm.back() }) }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Section("批量建档的默认病害类型") {
+            Section("帮助") {
+                NavRow("使用教程", "图文说明：贴靶标、拍照、复拍、看结果") { vm.go(Screen.Tutorial) }
+                Spacer(Modifier.height(6.dp))
+                NavRow("电脑端处理", "导出包查看器、在线重新分析、批量生成靶标") { vm.go(Screen.Planned("电脑端处理", PC_HELP)) }
+            }
+            Section("靶标与编号") {
+                NavRow("生成靶标", "批量打印编号二维码（T0001、T0002…）和圆点") { vm.go(Screen.Targets) }
+                Spacer(Modifier.height(6.dp))
+                NavRow("编号对应", "靶标编号 → 项目编号 / 名称，可导入导出 CSV") { vm.go(Screen.CodeMap) }
+            }
+            Section("新测点的默认病害类型") {
                 Text("新测点默认用这个类型；二维码里写了类型的按码（如 B01-Z023;40mm;螺栓）。每个测点之后都能单独改。", color = Muted, fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
                 KindPicker(vm.batchKinds) { vm.updateBatchKinds(it) }
@@ -151,6 +165,18 @@ private fun Section(title: String, content: @Composable () -> Unit) {
             Spacer(Modifier.height(8.dp))
             content()
         }
+    }
+}
+
+@Composable
+private fun NavRow(title: String, sub: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Page).clickable(onClick = onClick).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(sub, fontSize = 12.sp, color = Muted)
+        }
+        Icon(Icons.Default.ChevronRight, null, tint = Muted)
     }
 }
 

@@ -22,8 +22,16 @@ import java.io.File
 sealed class Screen {
     data object Home : Screen()
     /** zoneId 非空：给指定测点复拍（拍完进对比页）；否则批量拍摄（mode 决定新建还是复拍，拍完不跳页）。 */
-    data class Camera(val zoneId: Long? = null, val mode: com.fieldalign.camera.data.CaptureMode = com.fieldalign.camera.data.CaptureMode.RESHOOT) : Screen()
+    data class Camera(val zoneId: Long? = null, val mode: com.fieldalign.camera.data.CaptureMode = com.fieldalign.camera.data.CaptureMode.AUTO) : Screen()
     data object Pending : Screen()
+    /** 批量生成编号靶标。 */
+    data object Targets : Screen()
+    /** 编号对应表（二维码编号 → 项目编号）。 */
+    data object CodeMap : Screen()
+    /** 使用教程。 */
+    data object Tutorial : Screen()
+    /** 复拍指定测点：先选测点，再进带参考叠加的相机。 */
+    data object PickZone : Screen()
     data object Settings : Screen()
     data object Map : Screen()
     /** 规划中的功能：说明页。 */
@@ -143,7 +151,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             back()
         } else {
             repo.clearPending(r.file.absolutePath)
-            val zid = repo.createZone(name.ifBlank { r.qrText ?: "未命名测点" }, r.file, r.markers, dots, r.qrText, kinds = kinds)
+            val zid = repo.createZone(name.ifBlank { r.qrText?.let { repo.nameForQr(it) } ?: "未命名测点" }, r.file, r.markers, dots, r.qrText, kinds = kinds)
             if (importQueue.isNotEmpty()) { back(); continueQueue() } else replaceTop(Screen.ZoneDetail(zid))
         }
     }
@@ -186,6 +194,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var batchLastZone by mutableStateOf<Long?>(null); private set
     private val batchLock = kotlinx.coroutines.sync.Mutex()
 
+    /** 第一次打开显示教程。 */
+    var tutorialSeen by mutableStateOf(prefs.getBoolean("tutorial_seen", false)); private set
+    fun markTutorialSeen() { tutorialSeen = true; prefs.edit().putBoolean("tutorial_seen", true).apply() }
+
+    /** 生成靶标：下一次默认从上次最后一号往后接，避免重号。 */
+    var targetPrefix by mutableStateOf(prefs.getString("target_prefix", "T") ?: "T"); private set
+    fun nextTargetStart(prefix: String) = prefs.getInt("target_next_$prefix", 1)
+    fun makeTargets(prefix: String, start: Int, count: Int, digits: Int, onReady: (File) -> Unit) = viewModelScope.launch {
+        val codes = com.fieldalign.camera.data.CodeMap.codes(prefix, start, count, digits)
+        val f = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
+                com.fieldalign.camera.data.TargetSheet.pdf(codes, File(dir, "靶标_${codes.first()}-${codes.last()}.pdf"))
+            }.getOrNull()
+        }
+        if (f == null) { toast = "生成失败"; return@launch }
+        repo.codeMap.register(codes)
+        targetPrefix = prefix
+        prefs.edit().putString("target_prefix", prefix).putInt("target_next_$prefix", maxOf(nextTargetStart(prefix), start + count)).apply()
+        onReady(f)
+    }
+
+    /** 编号对应表改动后：已建档的测点按表改名。 */
+    fun applyCodeMap() = viewModelScope.launch {
+        val n = repo.applyCodeMap()
+        toast = if (n > 0) "已按对应表更新 $n 个测点名称" else "已保存"
+        codeMapVersion++
+    }
+    /** 对应表内容版本号（界面刷新用）。 */
+    var codeMapVersion by mutableStateOf(0)
+
+    fun importCodeMap(uri: android.net.Uri) = viewModelScope.launch {
+        val n = withContext(Dispatchers.IO) {
+            runCatching {
+                val text = getApplication<Application>().contentResolver.openInputStream(uri)!!.use { it.readBytes() }.let { b ->
+                    val u = String(b, Charsets.UTF_8)
+                    if ('\uFFFD' in u) String(b, charset("GBK")) else u          // Excel 另存的 CSV 可能是 GBK
+                }
+                repo.codeMap.importCsv(text)
+            }.getOrNull()
+        }
+        if (n == null) { toast = "读取失败：请选择 CSV 文件"; return@launch }
+        val r = repo.applyCodeMap()
+        codeMapVersion++
+        toast = "导入 $n 条" + if (r > 0) "，更新了 $r 个测点名称" else ""
+    }
+
     fun resetBatch() { batchCreated = 0; batchMatched = 0; batchPending = 0; batchLast = null; batchLastZone = null }
 
     /** 批量拍摄：照片排队在后台逐张处理，相机可以接着拍。 */
@@ -197,8 +252,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         when (r) {
             is com.fieldalign.camera.data.Batch.Created -> { batchCreated++; batchLast = "已建档：${r.name}"; batchLastZone = r.zoneId }
             is com.fieldalign.camera.data.Batch.Matched -> { batchMatched++; batchLastZone = r.zoneId
-                val lv = repo.db.photos().get(r.photoId)?.conclusion?.let { Regex("^【(.+?)】").find(it)?.groupValues?.get(1) }
-                batchLast = "已归入：${r.name}（${r.how}）" + (lv?.let { " · $it" } ?: "") }
+                val ph = repo.db.photos().get(r.photoId)
+                val lv = ph?.conclusion?.let { Regex("^【(.+?)】").find(it)?.groupValues?.get(1) }
+                // 二维码相同但画面和参考对不上：多半是同一个码贴到了别处（或拍的不是同一处），提醒复核
+                val warn = if (ph?.status == "conflict" || ph?.status == "failed") " ⚠ 画面和参考不一致，请复核" else ""
+                batchLast = "已归入：${r.name}（${r.how}）" + (lv?.let { " · $it" } ?: "") + warn }
             is com.fieldalign.camera.data.Batch.Pending -> { batchPending++; batchLast = "待确认：${r.reason}"; batchLastZone = null }
             is com.fieldalign.camera.data.Batch.Error -> { batchLast = r.message; batchLastZone = null }
         }

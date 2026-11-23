@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下载 · 复拍对齐相机</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.dl { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; margin-bottom: 14px; scroll-margin-top: 10px; }
+.dl .meta { font-size: 12px; color: var(--muted); word-break: break-all; }
+.dl ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+@media (max-width: 640px) { .dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <a class="brand" href="/"><i></i>复拍对齐相机</a>
+  <nav><a href="/">首页</a><a href="/samples/">测试图片</a><a href="/process/">在线处理</a><a href="/targets/">靶标</a><a href="/viewer/">导出包查看器</a><a class="on" href="/download/">下载</a></nav>
+</div></header>
+<main>
+  <h1>下载</h1>
+  <div id="list"><p class="muted">加载中…</p></div>
+
+  <h2>电脑端工具包怎么用</h2>
+  <div class="card small">
+    <p style="margin-top:0">需要 Python 3.9 以上。解压后在工具包目录里：</p>
+    <pre>python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt      # Windows：.venv\Scripts\pip install -r requirements.txt
+
+# 手机「导出全部」的 ZIP → HTML 报告（可调裂缝延长阈值）
+.venv/bin/python report.py 全部测点.zip --grow-mm 10
+
+# 两张照片直接对比（结果图写到 out/ 目录）
+.venv/bin/python photo_archive.py compare 参考.jpg 本次.jpg -o out</pre>
+    <p class="muted" style="margin-bottom:0">离线查看器 <code>查看器.html</code> 双击用浏览器打开，把导出 ZIP 拖进去即可，不需要联网。</p>
+  </div>
+</main>
+<footer>复拍对齐相机 · 下载</footer>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const mb = n => (n / 1048576).toFixed(1) + " MB";
+fetch("/download/files.json").then(r => r.json()).then(fs => {
+  document.getElementById("list").innerHTML = fs.map(f => `<div class="card dl" id="${f.id}">
+    <div><h3>${esc(f.title)}</h3><div class="muted small">${esc(f.desc)}</div>
+      ${f.points ? `<ul>${f.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      <div class="meta" style="margin-top:6px">${esc(f.file)} · ${mb(f.size)} · SHA256 ${esc(f.sha256)}</div></div>
+    <a class="btn pri" href="/download/${encodeURIComponent(f.file)}">下载</a></div>`).join("");
+  if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+});
+</script>
+</body>
+</html>

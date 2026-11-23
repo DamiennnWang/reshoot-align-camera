@@ -113,6 +113,9 @@ object Analysis {
         } else if (plan.parts) sections.add("部件：未发现缺失或新增")
         // 只测裂缝的测点：沿用裂缝等级（无裂缝/稳定/延长/变宽/新增），和以前的结论一致
         val level = if (kinds == setOf(Defects.Kind.CRACK) && crackLevel != null) crackLevel else LEVELS[sev]
+        // 发现了剥落等面状病害、而裂缝没有发展：面状结论放第一行（一眼看到的是真正的变化）
+        val areaIdx = sections.indexOfFirst { it.startsWith("面状：") }
+        if (areaIdx > 0 && areas.isNotEmpty() && crackLevel in setOf("无裂缝", "稳定")) sections.add(0, sections.removeAt(areaIdx))
         val text = sections.joinToString("\n").ifEmpty { "未发现变化" }
         lap("结论")
         val img = draw(ch?.let { Measure.draw(al2, it, mmpp) } ?: al2.clone(), areas, disp, marks, parts)

@@ -3,6 +3,7 @@
 
   python make_target.py --zone B01-Z023              # 输出 targets/B01-Z023.pdf/.png
   python make_target.py --zone B01-Z023 B01-Z024     # 一次生成多个测区
+  python make_target.py --sheet T 1 24               # 批量编号贴纸：T0001…T0024，每页 6 个 + 编号对应表 CSV
 
 每页包含：
   * 一个二维码（码区 40mm，内容=测区编号，纠错等级 H）
@@ -25,12 +26,19 @@ QR_MM = 40.0
 DOT_MM = 16.0
 
 
+CJK_FONTS = ("/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc", "C:/Windows/Fonts/msyh.ttc",
+             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")
+HAS_CJK = any(os.path.exists(p) for p in CJK_FONTS)
+
+
 def font(size_px):
-    for p in ("/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc",
-              "C:/Windows/Fonts/msyh.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+    for p in CJK_FONTS + ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",):
         if os.path.exists(p):
             return ImageFont.truetype(p, size_px)
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size_px)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def qr_image(text: str) -> Image.Image:
@@ -92,6 +100,75 @@ def make_page(zone: str) -> Image.Image:
     return page
 
 
+# ---------------------------------------------------------------- 批量编号贴纸（和手机 App「生成靶标」同一版式）
+CELL_W, CELL_H = 95.0, 92.0       # 每个标签（mm），A4 上 2 列 × 3 行
+SHEET_COLS, SHEET_ROWS = 2, 3
+
+
+def codes_for(prefix: str, start: int, count: int, digits: int = 4):
+    return [f"{prefix}{n:0{digits}d}" for n in range(start, start + count)]
+
+
+def _dashed_rect(d, x0, y0, x1, y1, fill=170, dash=24, w=2):
+    for x in range(int(x0), int(x1), dash):
+        d.line([x, y0, min(x + dash // 2, x1), y0], fill=fill, width=w)
+        d.line([x, y1, min(x + dash // 2, x1), y1], fill=fill, width=w)
+    for y in range(int(y0), int(y1), dash):
+        d.line([x0, y, x0, min(y + dash // 2, y1)], fill=fill, width=w)
+        d.line([x1, y, x1, min(y + dash // 2, y1)], fill=fill, width=w)
+
+
+def draw_label(page, d, x0, y0, code, f_code, f_tip):
+    """一个标签：二维码 40mm（内容 = 编号）+ 编号文字 + 3 个 16mm 圆点贴纸，虚线为裁切线。"""
+    _dashed_rect(d, x0, y0, x0 + CELL_W * MM, y0 + CELL_H * MM)
+    qr = qr_image(code)
+    qx = round(x0 + (CELL_W - QR_MM) / 2 * MM)
+    qy = round(y0 + 7 * MM)
+    page.paste(qr, (qx, qy))
+    tw = d.textlength(code, font=f_code)
+    d.text((x0 + CELL_W / 2 * MM - tw / 2, qy + qr.height + 2 * MM), code, fill=0, font=f_code)
+    tip = "复拍对齐靶标 · 二维码和圆点分开剪下" if HAS_CJK else "Cut out the QR code and the 3 dots separately"
+    d.text((x0 + CELL_W / 2 * MM - d.textlength(tip, font=f_tip) / 2, qy + qr.height + 9.5 * MM), tip, fill=110, font=f_tip)
+    for i in range(3):
+        cx = x0 + (CELL_W / 2 + (i - 1) * 27) * MM
+        cy = y0 + 76 * MM
+        r = DOT_MM / 2 * MM
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=0)
+        m = r + 4.5 * MM
+        _dashed_rect(d, cx - m, cy - m, cx + m, cy + m, fill=200, dash=16)
+
+
+def make_sheet(codes):
+    """返回 PIL 页面列表（A4，300dpi），每页 6 个标签。"""
+    f_code, f_tip, f_head = font(round(6 * MM)), font(round(2.6 * MM)), font(round(3 * MM))
+    per = SHEET_COLS * SHEET_ROWS
+    pages = []
+    for p0 in range(0, len(codes), per):
+        page = Image.new("L", A4, 255)
+        d = ImageDraw.Draw(page)
+        chunk = codes[p0:p0 + per]
+        head = (f"复拍对齐靶标  {chunk[0]} – {chunk[-1]}    按 100%（实际大小）打印，二维码边长应为 40 mm" if HAS_CJK else
+                f"Targets {chunk[0]} - {chunk[-1]}    Print at 100% (actual size): QR side must be 40 mm")
+        d.text((10 * MM, 4.5 * MM), head, fill=90, font=f_head)
+        for i, c in enumerate(chunk):
+            x0 = (210 - SHEET_COLS * CELL_W) / 2 * MM + (i % SHEET_COLS) * CELL_W * MM
+            y0 = 11 * MM + (i // SHEET_COLS) * CELL_H * MM
+            draw_label(page, d, x0, y0, c, f_code, f_tip)
+        pages.append(page)
+    return pages
+
+
+def sheet_pdf(codes, path):
+    pages = make_sheet(codes)
+    pages[0].save(path, save_all=True, append_images=pages[1:], resolution=DPI)
+    return path
+
+
+def mapping_csv(codes) -> str:
+    """编号对应表：贴好后填上项目编号/名称，再导入手机，测点会自动改名。"""
+    return "\ufeff编号,项目编号,名称,备注\n" + "".join(f"{c},,,\n" for c in codes)
+
+
 def texture(d: ImageDraw.ImageDraw, x0, y0, x1, y1, seed=0):
     """浅色随机斑点和细线。斑点直径 ≤ 2.5mm，远小于 16mm 圆点，不会被误认成靶标。"""
     import random
@@ -117,8 +194,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--zone", nargs="+", default=["B01-Z023"], help="测区编号（会写进二维码）")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "targets"))
+    ap.add_argument("--sheet", nargs=3, metavar=("前缀", "起始号", "数量"), help="批量编号贴纸，如 --sheet T 1 24")
+    ap.add_argument("--digits", type=int, default=4)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    if a.sheet:
+        codes = codes_for(a.sheet[0], int(a.sheet[1]), int(a.sheet[2]), a.digits)
+        base = os.path.join(a.out, f"靶标_{codes[0]}-{codes[-1]}")
+        sheet_pdf(codes, base + ".pdf")
+        with open(base + "_编号对应表.csv", "w", encoding="utf-8") as f:
+            f.write(mapping_csv(codes))
+        print("已生成：", os.path.abspath(base + ".pdf"), "及编号对应表 CSV")
+        print("打印时选“实际大小/100%”，不要选“适合页面”。")
+        return
     pages = [make_page(z) for z in a.zone]
     for z, p in zip(a.zone, pages):
         p.save(os.path.join(a.out, f"{z}.png"), dpi=(DPI, DPI))

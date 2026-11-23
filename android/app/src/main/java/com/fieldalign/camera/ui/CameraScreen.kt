@@ -226,7 +226,11 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?, mode: com.fieldalign.ca
         wider -> "比参考照片拍得更大范围（参考只占 ${(refArea!! * 100).roundToInt()}%）\n可以直接拍，拍完可设为新的参考"
         lostLong -> "画面和「${target?.name ?: ""}」的参考对不上\n如果锁错了，点上方「解锁」"
         live.hint.isNotEmpty() -> live.hint
-        targetZone == null -> if (batch) "对准测点拍照：有二维码按码归档\n无码按 位置 + 朝向 + 图像 匹配，认不出的进“待确认”" else "对准二维码，或对准拍摄对象自动识别"
+        targetZone == null -> when {
+            !batch -> "对准二维码，或对准拍摄对象自动识别"
+            mode == com.fieldalign.camera.data.CaptureMode.AUTO -> "对准测点拍照，一张或多张都行\n认识的自动归入，新编号、新位置自动建档"
+            else -> "对准测点拍照：有二维码按码归档\n无码按 位置 + 朝向 + 图像 匹配，认不出的进“待确认”"
+        }
         else -> "正在寻找参考画面…"
     }
     val hintBg by animateColorAsState(if (live.aligned) Good else Color(0xCC111820), label = "hint")
@@ -362,8 +366,11 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?, mode: com.fieldalign.ca
                 Text(listOfNotNull("新建 ${vm.batchCreated}", "归入 ${vm.batchMatched}", "待确认 ${vm.batchPending}",
                     if (vm.batchQueued > 0) "处理中 ${vm.batchQueued}" else null).joinToString("  ·  "),
                     color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                if (mode == com.fieldalign.camera.data.CaptureMode.AUTO)
+                    Text("新测点类型：${com.fieldalign.camera.align.Defects.labels(vm.batchKinds)} ▾", color = Color(0xFF9AA5B1), fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 2.dp).clip(RoundedCornerShape(8.dp)).clickable { kindsOpen = true }.padding(horizontal = 6.dp, vertical = 2.dp))
                 vm.batchLast?.let {
-                    Text(it, color = if (it.startsWith("待确认") || it.startsWith("处理失败")) Amber else Color(0xFFB8C2CC), fontSize = 12.sp,
+                    Text(it, color = if (it.startsWith("待确认") || it.startsWith("处理失败") || it.contains("⚠")) Amber else Color(0xFFB8C2CC), fontSize = 12.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 2.dp).clickable(enabled = vm.batchLastZone != null) {
                             vm.batchLastZone?.let { z -> vm.go(com.fieldalign.camera.Screen.ZoneDetail(z)) } })

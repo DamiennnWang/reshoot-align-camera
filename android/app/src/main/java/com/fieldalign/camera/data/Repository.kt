@@ -31,8 +31,13 @@ sealed class Outcome {
     data class Error(val message: String) : Outcome()
 }
 
-/** 批量拍摄的模式：新建测点（每张一个测点）/ 复拍（按二维码或 位置 + 朝向 + 图像 匹配已有测点）。 */
-enum class CaptureMode { NEW, RESHOOT }
+/**
+ * 连续拍摄的模式：
+ *  AUTO    — 拍照（默认）：认识的测点自动归入；新编号、或附近没有任何测点的新位置自动建档；拿不准的进“待确认”；
+ *  NEW     — 只建新测点（每张一个测点）；
+ *  RESHOOT — 只复拍（按二维码或 位置 + 朝向 + 图像 匹配已有测点，认不出的进“待确认”，不新建）。
+ */
+enum class CaptureMode { AUTO, NEW, RESHOOT }
 
 /** 批量拍摄一张照片的处理结果（不打断拍摄，相机页只显示一行提示）。 */
 sealed class Batch {
@@ -48,6 +53,20 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         const val PENDING = -1L
     }
     private val sigCache = ConcurrentHashMap<Long, AlignEngine.Signature>()   // zoneId → 参考照片识别签名
+    /** 编号对应表（二维码编号 → 项目编号 / 名称）。 */
+    val codeMap by lazy { CodeMap(ctx.filesDir) }
+    /** 按二维码建测点时的名称：对应表里填了项目编号/名称就用它，否则用编号。 */
+    fun nameForQr(qr: String): String = codeMap.displayFor(qr) ?: qr
+
+    /** 对应表改了以后：把已建档、编号在表里的测点改成对应的名称。返回改名个数。 */
+    suspend fun applyCodeMap(): Int = withContext(Dispatchers.IO) {
+        var n = 0
+        db.zones().all().forEach { z ->
+            val d = z.qrText?.let { codeMap.displayFor(it) } ?: return@forEach
+            if (d != z.name) { db.zones().update(z.copy(name = d)); n++ }
+        }
+        n
+    }
 
     fun newPhotoFile(): File {
         val dir = File(ctx.filesDir, "photos").apply { mkdirs() }
@@ -204,7 +223,7 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
                 return@withContext Batch.Matched(z.id, alignAndStore(z, file, work, m, "二维码 $qr", here, ps), z.name, "二维码")
             }
             if (mode == CaptureMode.NEW || qr != null) {
-                val name = qr ?: autoName()
+                val name = qr?.let { nameForQr(it) } ?: autoName()
                 val k = Defects.fromQr(qr).ifEmpty { kinds }
                 val zid = createZone(name, file, m, if (m.qrText != null) AlignEngine.selectReferenceDots(m) else emptyList(), qr, here, ps, k)
                 return@withContext Batch.Created(zid, name)
@@ -213,6 +232,12 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
             if (hit != null) {
                 val (z, how) = hit
                 return@withContext Batch.Matched(z.id, alignAndStore(z, file, work, m, how, here, ps), z.name, "位置+图像")
+            }
+            // 拍照模式：附近（定位半径内）一个测点都没有 → 新位置，直接建档；附近有测点但认不出 → 待确认，避免重复建档
+            if (mode == CaptureMode.AUTO && nothingNearby(here)) {
+                val name = autoName()
+                val zid = createZone(name, file, m, emptyList(), null, here, ps, kinds)
+                return@withContext Batch.Created(zid, name)
             }
             val why = if (here == null) "没有定位，图像也没有唯一吻合的测点" else "附近没有图像吻合的测点（或有多个相似）"
             db.photos().insert(Photo(zoneId = PENDING, path = file.absolutePath, takenAt = takenAt(file), status = "pending",
@@ -223,6 +248,15 @@ class Repository(private val ctx: Context, val db: AppDb = AppDb.get(ctx)) {
         } catch (e: Throwable) {
             Batch.Error("处理失败：${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    /** 拍照模式判断“新位置”：库里没有测点；或有定位且半径内没有任何测点（没有定位记录的老测点不算附近）。 */
+    private suspend fun nothingNearby(here: GeoFix?): Boolean {
+        val zones = db.zones().all().filter { it.refPhotoId != null }
+        if (zones.isEmpty()) return true
+        if (here == null) return false
+        val r = Geo.nearRadius(here.acc) * 1.5
+        return zones.none { z -> z.lat == null || z.lon == null || Geo.distance(here.lat, here.lon, z.lat, z.lon) <= r }
     }
 
     /** 自动名称：测点 月日-当天序号（之后可以在测点页改名）。 */

@@ -56,6 +56,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 private val MODES = listOf("滑动", "叠加", "闪烁", "变化", "标注", "原图")
+/** 按钮显示顺序：标注放第一个（默认就看标注，最直观）。 */
+private val MODE_ORDER = listOf(4, 0, 1, 2, 3, 5)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,7 +106,7 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
     var qualityDismissed by remember { mutableStateOf(false) }
     var wideDismissed by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    var mode by remember { mutableIntStateOf(0) }
+    var mode by remember { mutableIntStateOf(4) }
     var split by remember { mutableFloatStateOf(0.5f) }
     var blend by remember { mutableFloatStateOf(0.5f) }
     var blinkNew by remember { mutableStateOf(false) }
@@ -179,9 +181,9 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
             HeadlineCard(pair?.regions ?: p.changeRegions ?: 0, pair?.changedRatio ?: p.changedRatio ?: 0.0,
                 pair?.lightRegions ?: p.lightRegions ?: 0, p.status)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                MODES.forEachIndexed { i, label ->
+                MODE_ORDER.forEachIndexed { pos, i ->
                     SegmentedButton(selected = mode == i, onClick = { mode = i },
-                        shape = SegmentedButtonDefaults.itemShape(i, MODES.size)) { Text(label, fontSize = 13.sp) }
+                        shape = SegmentedButtonDefaults.itemShape(pos, MODES.size)) { Text(MODES[i], fontSize = 13.sp) }
                 }
             }
             // 对比基准选择
@@ -216,7 +218,7 @@ fun CompareScreen(vm: AppViewModel, photoId: Long) {
                         1 -> { refBmp?.let { Img(it) }; alignedBmp?.let { Img(it, blend) } }
                         2 -> { (if (blinkNew) alignedBmp else refBmp)?.let { Img(it) } }
                         3 -> changesBmp?.let { Img(it) }
-                        4 -> crackBmp?.let { Img(it) }
+                        4 -> (crackBmp ?: alignedBmp)?.let { Img(it) }
                         else -> rawBmp?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
                     }
                 }
