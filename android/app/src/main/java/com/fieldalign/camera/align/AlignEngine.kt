@@ -321,7 +321,7 @@ object AlignEngine {
                        val kpRef: Int, val kpNew: Int,
                        val srcAll: List<P> = emptyList(), val dstAll: List<P> = emptyList())
 
-    /** 参考照片的 SIFT 特征缓存：同一系列连续拍多张时，参考照片只算一次（约占单张处理时间的四分之一）。 */
+    /** 参考照片的 SIFT 特征缓存：同一测点连续拍多张时，参考照片只算一次（约占单张处理时间的四分之一）。 */
     class SiftFeatures(val kp: Array<org.opencv.core.KeyPoint>, val desc: Mat)
     private val siftCache = object : LinkedHashMap<String, SiftFeatures>(8, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, SiftFeatures>?) = size > 6
@@ -724,16 +724,16 @@ object AlignEngine {
     data class Candidate<K>(val key: K, val inliers: Int, val coverage: Double)
     data class Identify<K>(val decision: String, val best: K?, val ranking: List<Candidate<K>>, val message: String)
 
-    /** 判断新照片属于哪个系列；背景相似、分不清时返回 ambiguous。 */
+    /** 判断新照片属于哪个测点；背景相似、分不清时返回 ambiguous。 */
     fun <K> identify(n: Signature, refs: List<Pair<K, Signature>>,
                      minInliers: Int = ID_MIN_INLIERS, minCoverage: Double = ID_MIN_COVERAGE): Identify<K> {
         val rank = refs.map { (k, s) -> val (i, c, _) = matchSignatures(n, s); Candidate(k, i, c) }
             .sortedByDescending { it.inliers }
         if (rank.isEmpty() || rank[0].inliers < minInliers || rank[0].coverage < minCoverage)
-            return Identify("no_match", null, rank, "没有找到特征足够吻合的系列")
+            return Identify("no_match", null, rank, "没有找到特征足够吻合的测点")
         val best = rank[0]; val second = rank.getOrNull(1)?.inliers ?: 0
         if (second >= ID_MIN_INLIERS * 0.5 && best.inliers < ID_UNIQUE_RATIO * second)
-            return Identify("ambiguous", null, rank, "与多个系列都相似（${best.inliers} vs $second 个匹配点），请贴二维码或手动选择")
+            return Identify("ambiguous", null, rank, "与多个测点都相似（${best.inliers} vs $second 个匹配点），请贴二维码或手动选择")
         return Identify("unique", best.key, rank, "按图像特征识别（${best.inliers} 个匹配点）")
     }
 

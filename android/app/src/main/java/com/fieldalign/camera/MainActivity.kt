@@ -88,7 +88,7 @@ fun AppRoot(vm: AppViewModel, hasCamera: Boolean, requestCamera: () -> Unit) {
         when (val s = vm.current) {
             is Screen.Home -> HomeScreen(vm)
             is Screen.Camera ->
-                if (hasCamera) CameraScreen(vm, s.zoneId)
+                if (hasCamera) CameraScreen(vm, s.zoneId, s.mode)
                 else Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     LaunchedEffect(Unit) { requestCamera() }   // 进入相机页时直接弹出系统授权
                     Text("需要相机权限才能拍照")
@@ -98,6 +98,14 @@ fun AppRoot(vm: AppViewModel, hasCamera: Boolean, requestCamera: () -> Unit) {
             is Screen.Compare -> CompareScreen(vm, s.photoId)
             is Screen.Register -> RegisterScreen(vm, s)
             is Screen.Unclassified -> UnclassifiedScreen(vm, s.outcome)
+            is Screen.Pending -> com.fieldalign.camera.ui.PendingScreen(vm)
+            is Screen.Settings -> com.fieldalign.camera.ui.SettingsScreen(vm)
+            is Screen.Map -> com.fieldalign.camera.ui.MapScreen(vm)
+            is Screen.Planned -> com.fieldalign.camera.ui.PlannedScreen(vm, s.title, s.body)
+            is Screen.Targets -> com.fieldalign.camera.ui.TargetsScreen(vm)
+            is Screen.CodeMap -> com.fieldalign.camera.ui.CodeMapScreen(vm)
+            is Screen.Tutorial -> com.fieldalign.camera.ui.TutorialScreen(vm)
+            is Screen.PickZone -> com.fieldalign.camera.ui.PickZoneScreen(vm)
         }
         if (vm.processing) {
             Box(Modifier.fillMaxSize().padding(0.dp), contentAlignment = Alignment.Center) {

@@ -215,6 +215,75 @@ MESH_DENSITY = 0.08           # 骨架长度 / 外接框面积 超过此值且�
 MIN_ELONG = 5.0               # 长度至少是平均宽度的 5 倍
 
 
+LONG_WEAK_PX = 80            # 弱响应连通区外接框对角线 ≥ 80px 且很细（面积 ≤ 5×对角线）也算裂缝
+LONG_WEAK_FILL = 5.0
+LINK_GAP = 14                 # 断开的裂缝段：端点沿走向 14px 内能接上另一段就连起来（弯曲、粗细变化处常断开）
+LINK_ANGLE = 30.0             # 连接方向与端点走向的夹角上限（度）
+LINK_MIN_SEG = 8              # 参与连接的段至少这么长（像素），避免把噪声点连成线
+_N8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+
+def _end_tangent(sk, y, x, steps=10):
+    """从端点沿骨架往回走 steps 步，返回端点处指向外侧的单位走向 (dx, dy)。"""
+    h, w = sk.shape
+    prev, cur = None, (y, x)
+    for _ in range(steps):
+        nxt = None
+        for dy, dx in _N8:
+            yy, xx = cur[0] + dy, cur[1] + dx
+            if 0 <= yy < h and 0 <= xx < w and sk[yy, xx] and (yy, xx) != prev and (yy, xx) != (y, x):
+                nxt = (yy, xx); break
+        if nxt is None:
+            break
+        prev, cur = cur, nxt
+    v = np.array([x - cur[1], y - cur[0]], float)
+    n = np.hypot(*v)
+    return v / n if n >= 3 else None
+
+
+def link_gaps(lo: np.ndarray, ln: np.ndarray, t_gap: float) -> np.ndarray:
+    """把同一条裂缝断开的几段连起来：每个端点沿自己的走向往前找 LINK_GAP 内的另一段骨架，
+    夹角不超过 LINK_ANGLE、连线上的线段响应高于 t_gap（有一点裂缝迹象）才连。返回补了连线的 lo。"""
+    sk = prune(thin(lo), 4)
+    n, lab = cv2.connectedComponents(sk, connectivity=8)
+    if n <= 2:
+        return lo
+    lens = link_length(sk, lab, n)
+    nb = neighbor_count(sk)
+    ey, ex = np.nonzero((sk > 0) & (nb == 1))
+    out = lo.copy()
+    h, w = sk.shape
+    G = LINK_GAP; cosA = np.cos(np.radians(LINK_ANGLE))
+    for y, x in zip(ey, ex):
+        li = lab[y, x]
+        if lens[li] < LINK_MIN_SEG:
+            continue
+        t = _end_tangent(sk, y, x)
+        if t is None:
+            continue
+        y0, y1, x0, x1 = max(y - G, 0), min(y + G + 1, h), max(x - G, 0), min(x + G + 1, w)
+        wl = lab[y0:y1, x0:x1]
+        qy, qx = np.nonzero((wl > 0) & (wl != li))
+        if qy.size == 0:
+            continue
+        ok = lens[wl[qy, qx]] >= LINK_MIN_SEG
+        vx = (qx + x0 - x).astype(float); vy = (qy + y0 - y).astype(float)
+        d = np.hypot(vx, vy)
+        cs = (vx * t[0] + vy * t[1]) / np.maximum(d, 1e-6)
+        ok &= (d <= G) & (cs >= cosA)
+        if not ok.any():
+            continue
+        score = np.where(ok, d * (2 - cs), np.inf)
+        j = int(np.argmin(score))
+        tx, ty = int(qx[j] + x0), int(qy[j] + y0)
+        k = max(int(d[j]), 2)
+        ly = np.round(np.linspace(y, ty, k + 1)).astype(int); lx = np.round(np.linspace(x, tx, k + 1)).astype(int)
+        if float(ln[ly, lx].mean()) < t_gap:
+            continue
+        cv2.line(out, (int(x), int(y)), (tx, ty), 1, 1)
+    return out
+
+
 def _detect_scale(gray: np.ndarray, mask: np.ndarray, min_len: float):
     """单一尺度检测。返回候选列表：每个为 dict(L, mean_w, max_w, ang, ys, xs, x0, y0, reg)，坐标为该尺度像素。"""
     bh = crack_response(gray, mask)
@@ -227,8 +296,14 @@ def _detect_scale(gray: np.ndarray, mask: np.ndarray, min_len: float):
     t_lo = max(med + K_LO * mad, 0.10)
     lo = ((ln > t_lo) & (bh > t_lo)).astype(np.uint8)
     lo = cv2.morphologyEx(lo, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    n, lab = cv2.connectedComponents(lo, connectivity=8)
-    strong = np.zeros(n, bool); strong[np.unique(lab[ln > t_hi])] = True; strong[0] = False
+    if min_len == MIN_LEN_PX:                  # 只在原图尺度连接（细裂缝才会断段；粗尺度连线容易把纹理连成假裂缝）
+        lo = link_gaps(lo, ln, med + 1.0 * mad)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(lo, connectivity=8)
+    strong = np.zeros(n, bool); strong[np.unique(lab[ln > t_hi])] = True
+    # 又长又细的弱响应也算：淡裂缝整条都只略高于弱阈值，但纹理噪声连不成这么长的细线
+    diag = np.hypot(st[:, 2], st[:, 3])
+    strong |= (diag >= LONG_WEAK_PX) & (st[:, 4] <= LONG_WEAK_FILL * diag)
+    strong[0] = False
     region = strong[lab].astype(np.uint8)
     skel = prune(thin(region), 8)
     n2, slab = cv2.connectedComponents(skel, connectivity=8)
@@ -341,6 +416,29 @@ class CrackChange:
     lost_px: float            # 参考有、复拍没有（修补、遮挡或拍摄问题）
 
 
+def drop_inside(cm: CrackMap, ignore: np.ndarray) -> CrackMap:
+    """去掉大半落在 ignore 区域里的裂缝（剥落、掉块的断口边缘看起来像裂缝）。"""
+    n, lab = cv2.connectedComponents(cm.skel, connectivity=8)
+    tot = np.bincount(lab.ravel(), minlength=n)
+    inside = np.bincount(lab[ignore > 0], minlength=n)
+    bad = inside > 0.5 * tot; bad[0] = False
+    if not bad.any():
+        return cm
+    rm = bad[lab]
+    skel = cm.skel.copy(); skel[rm] = 0
+    nr, rl = cv2.connectedComponents((cm.mask > 0).astype(np.uint8), connectivity=8)
+    badr = np.zeros(nr, bool); badr[np.unique(rl[rm])] = True; badr[0] = False
+    keepr = np.zeros(nr, bool); keepr[np.unique(rl[skel > 0])] = True
+    msk = cm.mask.copy(); msk[badr[rl] & ~keepr[rl]] = 0
+    cracks = []
+    for c in cm.cracks:
+        x, y, w, h = c.bbox
+        if skel[y:y + h, x:x + w].sum() > 0.5 * cm.skel[y:y + h, x:x + w].sum():
+            cracks.append(c)
+    return CrackMap(cracks, msk, skel, sum(c.length_px for c in cracks), max((c.max_w_px for c in cracks), default=0.0),
+                    cm.evid, cm.bg_med, cm.bg_mad)
+
+
 PRESENT_RATIO = 0.5           # 另一张照片同一位置的响应达到这一比例，就认为“那里本来就有”
 
 
@@ -384,10 +482,13 @@ def match_sharpness(a: np.ndarray, b: np.ndarray, mask: np.ndarray):
     return a, b, best_s
 
 
-def compare_cracks(ref_gray, new_gray, mask) -> CrackChange:
+def compare_cracks(ref_gray, new_gray, mask, ignore=None) -> CrackChange:
+    """ignore：非零处不算新增/消失（例如剥落、掉块区域的边缘：那是面状病害，不是裂缝）。"""
     ref_gray, new_gray, _ = match_sharpness(ref_gray, new_gray, mask)
     r = detect_cracks(ref_gray, mask)
     n = detect_cracks(new_gray, mask)
+    if ignore is not None:
+        r, n = drop_inside(r, ignore), drop_inside(n, ignore)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * GROW_TOL_PX + 1, 2 * GROW_TOL_PX + 1))
     near_ref = cv2.dilate(r.mask, k) > 0
     near_new = cv2.dilate(n.mask, k) > 0
@@ -405,6 +506,8 @@ def compare_cracks(ref_gray, new_gray, mask) -> CrackChange:
     absent_in_new = excess_near(n) < PRESENT_RATIO * excess_at(r)
     # 比较区边缘 8px 内不算：裂缝在一张照片里刚好被边界截断，会被误当成新增/消失
     inner = cv2.erode((mask > 0).astype(np.uint8), np.ones((17, 17), np.uint8), borderValue=0) > 0
+    if ignore is not None:
+        inner &= ignore == 0
     grow = ((n.skel > 0) & ~near_ref & absent_in_ref & inner).astype(np.uint8)
     lost = ((r.skel > 0) & ~near_new & absent_in_new & inner).astype(np.uint8)
     # 零散的几个像素不算（对齐误差、噪声）
@@ -428,6 +531,8 @@ class Rules:
     widen_min_px: float = 1.5        # 最大宽度增加至少 1.5 像素
     widen_min_ratio: float = 0.3     # 且至少 30%
     widen_mean_ratio: float = 0.15   # 同时整体平均宽度增加至少 15%（最大宽度是局部估计，单看它容易受清晰度影响）
+    widen_mean_px: float = 0.8       # 或：平均宽度增加至少 0.8 像素
+    widen_mean_big: float = 0.4      #     且至少 40%
     attention_mm: float = 0.3        # 最大宽度超过此值提示重点关注（有毫米比例时）
 
 
@@ -444,14 +549,18 @@ def conclude(ch: CrackChange, mmpp: Optional[float], light_regions: int = 0, lig
     """返回 (等级, 文字结论)。等级：无裂缝 / 稳定 / 延长 / 变宽 / 新增 / 延长且变宽。"""
     r, n = ch.ref, ch.new
     parts = []
-    new_cracks = [c for c in n.cracks if c.is_new and c.grow_px >= rules.grow_min_px]
+    # 很细（接近分辨率极限）的新裂缝要更长才算：若隐若现的分叉末梢一张检出、一张没检出很常见
+    new_cracks = [c for c in n.cracks if c.is_new and c.grow_px >= rules.grow_min_px * (2 if c.limited else 1)]
     longer = ch.grow_px >= max(rules.grow_min_px, rules.grow_min_ratio * r.total_px)
     def mean_w(cm):
         tot = sum(c.length_px for c in cm.cracks)
         return sum(c.mean_w_px * c.length_px for c in cm.cracks) / tot if tot > 0 else 0.0
-    wider = (r.cracks and n.cracks
-             and (n.max_w_px - r.max_w_px) >= max(rules.widen_min_px, rules.widen_min_ratio * r.max_w_px)
-             and mean_w(n) >= (1 + rules.widen_mean_ratio) * mean_w(r))
+    # 变宽：最大宽度和平均宽度都明显增加；或按长度加权的平均宽度大幅增加（更稳：最大宽度是局部估计，
+    # 细裂缝被拆成几段时某一段的局部估计可能偏大）
+    wider = bool(r.cracks and n.cracks and (
+        ((n.max_w_px - r.max_w_px) >= max(rules.widen_min_px, rules.widen_min_ratio * r.max_w_px)
+         and mean_w(n) >= (1 + rules.widen_mean_ratio) * mean_w(r))
+        or (mean_w(n) - mean_w(r)) >= max(rules.widen_mean_px, rules.widen_mean_big * mean_w(r))))
     if not n.cracks and not r.cracks:
         level = "无裂缝"
         parts.append("对比区域内未检出裂缝。")

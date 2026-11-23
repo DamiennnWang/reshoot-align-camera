@@ -14,6 +14,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -40,6 +41,11 @@ object Measure {
     const val MIN_ELONG = 5.0                 // 长度至少是平均宽度的 5 倍
     const val PRESENT_RATIO = 0.5             // 另一张照片同处响应达到这一比例，就认为“本来就有”
     const val GROW_MIN_PX = 40.0              // 新增至少这么长才算“延长/新增”
+    const val LINK_GAP = 14                   // 断开的裂缝段：端点沿走向 14px 内能接上另一段就连起来（弯曲、粗细变化处常断开）
+    const val LINK_ANGLE = 30.0               // 连接方向与端点走向的夹角上限（度）
+    const val LINK_MIN_SEG = 8.0              // 参与连接的段至少这么长（像素），避免把噪声点连成线
+    const val LONG_WEAK_PX = 80.0             // 弱响应连通区外接框对角线 ≥ 80px 且很细（面积 ≤ 5×对角线）也算裂缝
+    const val LONG_WEAK_FILL = 5.0
     private val BLUR_SIGMAS = doubleArrayOf(0.5, 0.8, 1.1, 1.5, 2.0, 2.6, 3.4)
     private const val SQRT2 = 1.4142135623730951
 
@@ -225,6 +231,62 @@ object Measure {
         return out
     }
 
+    private val N8 = arrayOf(intArrayOf(-1, -1), intArrayOf(-1, 0), intArrayOf(-1, 1), intArrayOf(0, -1),
+        intArrayOf(0, 1), intArrayOf(1, -1), intArrayOf(1, 0), intArrayOf(1, 1))   // (dy, dx)
+
+    /** 从端点沿骨架往回走 steps 步，返回端点处指向外侧的单位走向 (dx, dy)。 */
+    private fun endTangent(s: ByteArray, w: Int, h: Int, x: Int, y: Int, steps: Int = 10): DoubleArray? {
+        var px = -1; var py = -1; var cx = x; var cy = y
+        for (k in 0 until steps) {
+            var nx = -1; var ny = -1
+            for (d in N8) {
+                val yy = cy + d[0]; val xx = cx + d[1]
+                if (yy in 0 until h && xx in 0 until w && s[yy * w + xx].toInt() != 0 && !(yy == py && xx == px) && !(yy == y && xx == x)) { nx = xx; ny = yy; break }
+            }
+            if (nx < 0) break
+            px = cx; py = cy; cx = nx; cy = ny
+        }
+        val vx = (x - cx).toDouble(); val vy = (y - cy).toDouble(); val n = hypot(vx, vy)
+        return if (n >= 3) doubleArrayOf(vx / n, vy / n) else null
+    }
+
+    /**
+     * 把同一条裂缝断开的几段连起来（与 measure.link_gaps 相同）：每个端点沿自己的走向往前找 LINK_GAP 内的另一段骨架，
+     * 夹角不超过 LINK_ANGLE、连线上的线段响应高于 tGap 才连。直接在 lo（0/1）上画连线。
+     */
+    private fun linkGaps(lo: Mat, lnA: FloatArray, tGap: Double, w: Int, h: Int) {
+        val sk = bytes(lo); for (i in sk.indices) sk[i] = if (sk[i].toInt() != 0) 1 else 0
+        thin(sk, w, h); val s = prune(sk, w, h, 4)
+        val labM = Mat(); val n = Imgproc.connectedComponents(matOf(s, w, h), labM, 8, CvType.CV_32S)
+        if (n <= 2) return
+        val lab = ints(labM); val lens = linkLength(s, w, h, lab, n)
+        val g = LINK_GAP; val cosA = cos(Math.toRadians(LINK_ANGLE))
+        for (i in s.indices) {
+            if (s[i].toInt() == 0 || nb(s, w, h, i) != 1) continue
+            val li = lab[i]; if (lens[li] < LINK_MIN_SEG) continue
+            val x = i % w; val y = i / w
+            val t = endTangent(s, w, h, x, y) ?: continue
+            var best = Double.MAX_VALUE; var bx = -1; var by = -1; var bd = 0.0
+            for (yy in max(y - g, 0)..min(y + g, h - 1)) for (xx in max(x - g, 0)..min(x + g, w - 1)) {
+                val lq = lab[yy * w + xx]
+                if (lq == 0 || lq == li || lens[lq] < LINK_MIN_SEG) continue
+                val vx = (xx - x).toDouble(); val vy = (yy - y).toDouble(); val d = hypot(vx, vy)
+                if (d > g || d < 1e-6) continue
+                val cs = (vx * t[0] + vy * t[1]) / d
+                if (cs < cosA) continue
+                val sc = d * (2 - cs); if (sc < best) { best = sc; bx = xx; by = yy; bd = d }
+            }
+            if (bx < 0) continue
+            val k = max(bd.toInt(), 2); var sum = 0.0
+            for (j in 0..k) {
+                val qx = Math.round(x + (bx - x) * j / k.toDouble()).toInt(); val qy = Math.round(y + (by - y) * j / k.toDouble()).toInt()
+                sum += lnA[qy * w + qx]
+            }
+            if (sum / (k + 1) < tGap) continue
+            Imgproc.line(lo, Point(x.toDouble(), y.toDouble()), Point(bx.toDouble(), by.toDouble()), Scalar(1.0), 1)
+        }
+    }
+
     private class Cand(var srcW: Int = 0, val L: Double, val meanW: Double, val maxW: Double, val ang: Double, val pts: IntArray,
                        val x0: Int, val y0: Int, val bw: Int, val bh: Int, val reg: ByteArray)
 
@@ -245,10 +307,19 @@ object Measure {
         val lo = ByteArray(w * h) { if (lnA[it] > tLo && bhA[it] > tLo) 1 else 0 }
         val loM = matOf(lo, w, h)
         Imgproc.morphologyEx(loM, loM, Imgproc.MORPH_CLOSE, Mat.ones(3, 3, CvType.CV_8U))
-        val labM = Mat(); val n = Imgproc.connectedComponents(loM, labM, 8, CvType.CV_32S)
+        if (minLen == MIN_LEN_PX) linkGaps(loM, lnA, med + mad, w, h)   // 只在原图尺度连接（细裂缝才会断段；粗尺度连线容易把纹理连成假裂缝）
+        val labM = Mat(); val stM = Mat(); val ctM = Mat()
+        val n = Imgproc.connectedComponentsWithStats(loM, labM, stM, ctM, 8, CvType.CV_32S)
         val lab = ints(labM)
         val strong = BooleanArray(n)
         for (i in lab.indices) if (lnA[i] > tHi && lab[i] > 0) strong[lab[i]] = true
+        // 又长又细的弱响应也算：淡裂缝整条都只略高于弱阈值，但纹理噪声连不成这么长的细线
+        val stA = IntArray(5)
+        for (c in 1 until n) {
+            stM.get(c, 0, stA)
+            val diag = hypot(stA[2].toDouble(), stA[3].toDouble())
+            if (diag >= LONG_WEAK_PX && stA[4] <= LONG_WEAK_FILL * diag) strong[c] = true
+        }
         val region = ByteArray(w * h) { if (strong[lab[it]]) 1 else 0 }
         val th = region.copyOf(); thin(th, w, h)
         val q3 = System.currentTimeMillis()
@@ -427,11 +498,13 @@ object Measure {
 
     /** 参考与复拍（已对齐）比较裂缝。gray 为 8U 灰度（会被原地模糊以匹配清晰度）；mask 非零为比较区。 */
     @Volatile var lastTiming = ""
-    fun compare(refGray: Mat, newGray: Mat, mask: Mat): Change {
+    fun compare(refGray: Mat, newGray: Mat, mask: Mat, ignore: Mat? = null): Change {
         val t0 = System.currentTimeMillis()
         matchSharpness(refGray, newGray, mask)
         val t1 = System.currentTimeMillis()
-        val r = detect(refGray, mask); val t2 = System.currentTimeMillis(); val n = detect(newGray, mask)
+        val ig = ignore?.let { bytes(it) }
+        var r = detect(refGray, mask); val t2 = System.currentTimeMillis(); var n = detect(newGray, mask)
+        if (ig != null) { r = dropInside(r, ig); n = dropInside(n, ig) }
         val t3 = System.currentTimeMillis()
         val w = r.w; val h = r.h
         val k = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(2.0 * GROW_TOL_PX + 1, 2.0 * GROW_TOL_PX + 1))
@@ -445,6 +518,7 @@ object Measure {
         // 比较区边缘 8px 内不算：裂缝在一张照片里刚好被边界截断
         val inM = Mat(); Imgproc.erode(mask, inM, Mat.ones(17, 17, CvType.CV_8U), Point(-1.0, -1.0), 1, Core.BORDER_CONSTANT, Scalar(0.0))
         val inner = bytes(inM)
+        if (ig != null) for (i in inner.indices) if (ig[i].toInt() != 0) inner[i] = 0
         val pr = PRESENT_RATIO.toFloat()
         val grow0 = ByteArray(w * h) {
             if (n.skel[it].toInt() != 0 && nearRef[it].toInt() == 0 && inner[it].toInt() != 0 &&
@@ -462,11 +536,35 @@ object Measure {
         return Change(r, n, linkLength(grow, w, h)[0], grow, linkLength(lost, w, h)[0])
     }
 
+    /** 去掉大半落在 ignore 区域里的裂缝（剥落、掉块的断口边缘看起来像裂缝）。与 measure.drop_inside 相同。 */
+    private fun dropInside(cm: CrackMap, ig: ByteArray): CrackMap {
+        val w = cm.w; val h = cm.h
+        val lm = Mat(); val n = Imgproc.connectedComponents(matOf(cm.skel, w, h), lm, 8, CvType.CV_32S)
+        val lab = ints(lm)
+        val tot = IntArray(n); val inside = IntArray(n)
+        for (i in lab.indices) { tot[lab[i]]++; if (ig[i].toInt() != 0) inside[lab[i]]++ }
+        val bad = BooleanArray(n) { it > 0 && inside[it] > 0.5 * tot[it] }
+        if (bad.none { it }) return cm
+        val skel = cm.skel.copyOf(); for (i in skel.indices) if (bad[lab[i]]) skel[i] = 0
+        val rm = Mat(); val nr = Imgproc.connectedComponents(matOf(cm.region, w, h), rm, 8, CvType.CV_32S)
+        val rl = ints(rm)
+        val badr = BooleanArray(nr); val keepr = BooleanArray(nr)
+        for (i in rl.indices) { if (bad[lab[i]]) badr[rl[i]] = true; if (skel[i].toInt() != 0) keepr[rl[i]] = true }
+        badr[0] = false
+        val region = cm.region.copyOf(); for (i in region.indices) if (badr[rl[i]] && !keepr[rl[i]]) region[i] = 0
+        fun cnt(b: ByteArray, c: Crack): Int { var k = 0; for (y in c.y until c.y + c.h) for (x in c.x until c.x + c.w) if (b[y * w + x].toInt() != 0) k++; return k }
+        val cracks = cm.cracks.filter { cnt(skel, it) > 0.5 * cnt(cm.skel, it) }
+        val tot2 = cracks.sumOf { it.lengthPx }
+        return CrackMap(cracks, region, skel, w, h, tot2, cracks.maxOfOrNull { it.maxWPx } ?: 0.0, cm.evid, cm.bgMed, cm.bgMad,
+            if (tot2 > 0) cracks.sumOf { it.meanWPx * it.lengthPx } / tot2 else 0.0)
+    }
+
     // ------------------------------------------------------------ 结论
     /** 判定阈值（可按工程要求调整）。 */
     data class Rules(
         val growMinPx: Double = GROW_MIN_PX, val growMinRatio: Double = 0.05,
         val widenMinPx: Double = 1.5, val widenMinRatio: Double = 0.3, val widenMeanRatio: Double = 0.15,
+        val widenMeanPx: Double = 0.8, val widenMeanBig: Double = 0.4,
         val attentionMm: Double = 0.3,
     )
 
@@ -478,17 +576,21 @@ object Measure {
                      val newMaxW: Double, val grow: Double, val lost: Double, val newCrackCount: Int, val newCrackLen: Double,
                      val allLimited: Boolean, val refMeanW: Double = 0.0, val newMeanW: Double = 0.0)
 
+    /** 算作“新增裂缝”：全新且够长；很细（接近分辨率极限）的要两倍长——若隐若现的分叉末梢一张检出、一张没检出很常见。 */
+    private fun counted(c: Crack) = c.isNew && c.growPx >= GROW_MIN_PX * (if (c.limited) 2 else 1)
+
     fun stats(ch: Change) = Stats(ch.ref.cracks.size, ch.ref.totalPx, ch.ref.maxWPx, ch.new.cracks.size, ch.new.totalPx, ch.new.maxWPx,
-        ch.growPx, ch.lostPx, ch.new.cracks.count { it.isNew }, ch.new.cracks.filter { it.isNew }.sumOf { it.lengthPx },
+        ch.growPx, ch.lostPx, ch.new.cracks.count { counted(it) }, ch.new.cracks.filter { counted(it) }.sumOf { it.lengthPx },
         ch.new.cracks.isNotEmpty() && ch.new.cracks.all { it.limited }, ch.ref.meanWPx, ch.new.meanWPx)
 
     fun stats(json: String): Stats? = runCatching {
+        fun cnt(k: JSONObject) = k.getBoolean("new") && k.optDouble("grow_px", GROW_MIN_PX) >= GROW_MIN_PX * (if (k.optBoolean("limited")) 2 else 1)
         val o = JSONObject(json); val a = o.getJSONArray("cracks")
         val ks = (0 until a.length()).map { a.getJSONObject(it) }
         Stats(o.getInt("ref_count"), o.getDouble("ref_total_px"), o.getDouble("ref_max_w_px"), ks.size,
             ks.sumOf { it.getDouble("len_px") }, ks.maxOfOrNull { it.getDouble("max_w_px") } ?: 0.0,
             ks.sumOf { it.getDouble("grow_px") }.let { g -> if (o.has("grow_px")) o.getDouble("grow_px") else g },
-            o.optDouble("lost_px", 0.0), ks.count { it.getBoolean("new") }, ks.filter { it.getBoolean("new") }.sumOf { it.getDouble("len_px") },
+            o.optDouble("lost_px", 0.0), ks.count { cnt(it) }, ks.filter { cnt(it) }.sumOf { it.getDouble("len_px") },
             ks.isNotEmpty() && ks.all { it.getBoolean("limited") }, o.optDouble("ref_mean_w_px", 0.0),
             ks.sumOf { it.getDouble("len_px") }.let { t -> if (t > 0) ks.sumOf { it.getDouble("mean_w_px") * it.getDouble("len_px") } / t else 0.0 })
     }.getOrNull()
@@ -501,9 +603,11 @@ object Measure {
         val sb = StringBuilder()
         val longer = st.grow >= max(rules.growMinPx, rules.growMinRatio * st.refTotal)
         // 变宽：最大宽度和整体平均宽度都明显增加（最大宽度是局部估计，单看它容易受清晰度影响）
-        val wider = st.refCount > 0 && st.newCount > 0 &&
-            (st.newMaxW - st.refMaxW) >= max(rules.widenMinPx, rules.widenMinRatio * st.refMaxW) &&
-            st.newMeanW >= (1 + rules.widenMeanRatio) * st.refMeanW
+        // 或按长度加权的平均宽度大幅增加（更稳：细裂缝被拆成几段时某一段的局部估计可能偏大）
+        val wider = st.refCount > 0 && st.newCount > 0 && (
+            ((st.newMaxW - st.refMaxW) >= max(rules.widenMinPx, rules.widenMinRatio * st.refMaxW) &&
+                st.newMeanW >= (1 + rules.widenMeanRatio) * st.refMeanW) ||
+            (st.newMeanW - st.refMeanW) >= max(rules.widenMeanPx, rules.widenMeanBig * st.refMeanW))
         val allLimited = st.allLimited
         val level: String
         if (st.newCount == 0 && st.refCount == 0) {

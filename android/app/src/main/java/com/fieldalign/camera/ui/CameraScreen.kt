@@ -92,23 +92,27 @@ import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /**
- * 相机页。系列的确定方式（优先级从高到低）：
+ * 相机页。测点的确定方式（优先级从高到低）：
  *  1. 手动选择；
- *  2. 扫码锁定 —— 扫到码后系列就锁定，之后可以后退拍大场景，照片里二维码很小甚至不入镜都可以；
+ *  2. 扫码锁定 —— 扫到码后测点就锁定，之后可以后退拍大场景，照片里二维码很小甚至不入镜都可以；
  *     扫到库里没有的码时锁定为“新编号”，下一张照片作为它的参考；
- *  3. 自动识别 —— 无码时按 位置（附近的系列）+ 画面特征 识别。
+ *  3. 自动识别 —— 无码时按 位置（附近的测点）+ 画面特征 识别。
  */
 @Composable
-fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
+fun CameraScreen(vm: AppViewModel, initialZoneId: Long?, mode: com.fieldalign.camera.data.CaptureMode = com.fieldalign.camera.data.CaptureMode.RESHOOT) {
+    val batch = initialZoneId == null                                  // 批量拍摄：拍完不跳页
+    val isNew = batch && mode == com.fieldalign.camera.data.CaptureMode.NEW
+    var kindsOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { if (batch) vm.resetBatch() }
     val ctx = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val zones by vm.repo.db.zones().summaries().collectAsState(initial = emptyList())
 
     var live by remember { mutableStateOf(FrameGuide.LiveState()) }
-    var lockZone by remember { mutableStateOf(initialZoneId) }          // 锁定的系列（手动或扫码）
+    var lockZone by remember { mutableStateOf(initialZoneId) }          // 锁定的测点（手动或扫码）
     var lockByScan by remember { mutableStateOf(false) }
     var lockNewQr by remember { mutableStateOf<String?>(null) }         // 扫到的新码（库里没有）
-    var suggestZone by remember { mutableStateOf<Long?>(null) }         // 按特征/位置自动识别的系列
+    var suggestZone by remember { mutableStateOf<Long?>(null) }         // 按特征/位置自动识别的测点
     val targetZone = lockZone ?: suggestZone
     var ghost by remember { mutableStateOf<Bitmap?>(null) }
     var showGhost by remember { mutableStateOf(true) }
@@ -148,7 +152,7 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
             .build()
     }
 
-    // 扫到二维码 → 锁定对应系列（手动选择优先，不被覆盖）。离开二维码后锁定保持，方便后退拍全景。
+    // 扫到二维码 → 锁定对应测点（手动选择优先，不被覆盖）。离开二维码后锁定保持，方便后退拍全景。
     LaunchedEffect(live.qrText) {
         val q = live.qrText ?: return@LaunchedEffect
         if (lockZone != null && !lockByScan) return@LaunchedEffect
@@ -157,14 +161,14 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
         else { lockZone = null; lockByScan = false; lockNewQr = q }
         suggestZone = null
     }
-    // 无码：附近的系列里按画面特征自动识别（位置每变 ~100 米刷新一次候选）
+    // 无码：附近的测点里按画面特征自动识别（位置每变 ~100 米刷新一次候选）
     val geoKey = geo?.let { (it.lat * 1000).roundToInt() to (it.lon * 1000).roundToInt() }
-    LaunchedEffect(geoKey) { analyzer.candidates = vm.guideCandidates(tracker.fresh()) }
+    LaunchedEffect(geoKey) { analyzer.candidates = if (isNew) emptyList() else vm.guideCandidates(tracker.fresh()) }
     LaunchedEffect(live.suggestedZone) {
         val z = live.suggestedZone ?: return@LaunchedEffect
-        if (lockZone == null && lockNewQr == null) suggestZone = z
+        if (lockZone == null && lockNewQr == null && !isNew) suggestZone = z
     }
-    // 目标系列变化 → 准备引导数据和参考半透明图
+    // 目标测点变化 → 准备引导数据和参考半透明图
     LaunchedEffect(targetZone) {
         val z = targetZone
         if (z == null) { analyzer.target = null; ghost = null; return@LaunchedEffect }
@@ -208,7 +212,7 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
     // 参考画面在当前取景中的面积（1 = 一样大）。明显小于 1：当前比参考拍得更大范围（后退拍全景、参考是特写）
     val refArea = live.quad?.let { com.fieldalign.camera.align.convexHullArea(it) }
     val wider = refArea != null && refArea < 0.5
-    // 有目标却持续找不到参考画面：多半是锁错了系列，或参考与现场差别太大
+    // 有目标却持续找不到参考画面：多半是锁错了测点，或参考与现场差别太大
     var lostSince by remember { mutableStateOf(0L) }
     val lostNow = targetZone != null && live.quad == null && lockNewQr == null
     if (!lostNow) lostSince = 0L else if (lostSince == 0L) lostSince = System.currentTimeMillis()
@@ -217,19 +221,32 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
     // 提示文案：新码 / 比参考范围大 / 长时间对不上 / 引导
     val hint = when {
         lockNewQr != null -> "后退，把整个场景拍进画面\n这张将作为「$lockNewQr」的参考（二维码可以不入镜）"
+        isNew && lockZone != null -> "这个二维码已建档：「${target?.name ?: ""}」\n拍照将作为它的复拍"
+        isNew -> "对准测点拍照：每张建一个新测点\n有二维码时按码建档，名称可以之后再改"
         wider -> "比参考照片拍得更大范围（参考只占 ${(refArea!! * 100).roundToInt()}%）\n可以直接拍，拍完可设为新的参考"
         lostLong -> "画面和「${target?.name ?: ""}」的参考对不上\n如果锁错了，点上方「解锁」"
         live.hint.isNotEmpty() -> live.hint
-        targetZone == null -> "对准二维码，或对准拍摄对象自动识别"
+        targetZone == null -> when {
+            !batch -> "对准二维码，或对准拍摄对象自动识别"
+            mode == com.fieldalign.camera.data.CaptureMode.AUTO -> "对准测点拍照，一张或多张都行\n认识的自动归入，新编号、新位置自动建档"
+            else -> "对准测点拍照：有二维码按码归档\n无码按 位置 + 朝向 + 图像 匹配，认不出的进“待确认”"
+        }
         else -> "正在寻找参考画面…"
     }
     val hintBg by animateColorAsState(if (live.aligned) Good else Color(0xCC111820), label = "hint")
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        // ---------------- 顶栏：返回、系列选择、参考叠加开关
+        // ---------------- 顶栏：返回、测点选择、参考叠加开关
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White) }
-            Box(Modifier.weight(1f)) {
+            if (isNew) Box(Modifier.weight(1f)) {
+                Row(Modifier.clip(RoundedCornerShape(50)).background(Color(0x26FFFFFF)).clickable { kindsOpen = true }
+                    .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("批量建档 · ${com.fieldalign.camera.align.Defects.labels(vm.batchKinds)}", color = Color.White, fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+                    Icon(Icons.Default.ArrowDropDown, null, tint = Color.White)
+                }
+            } else Box(Modifier.weight(1f)) {
                 Row(Modifier.clip(RoundedCornerShape(50)).background(Color(0x26FFFFFF)).clickable { pickerOpen = true }
                     .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(when {
@@ -241,7 +258,7 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
                     Text(when {
                         lockNewQr != null -> "新编号 $lockNewQr"
                         target != null -> target.name
-                        else -> "自动识别系列"
+                        else -> "自动识别测点"
                     }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 190.dp))
                     Icon(Icons.Default.ArrowDropDown, null, tint = Color.White)
@@ -345,6 +362,20 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
         // ---------------- 底部：定位状态、透明度、快门
         Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceEvenly) {
+            if (batch) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(listOfNotNull("新建 ${vm.batchCreated}", "归入 ${vm.batchMatched}", "待确认 ${vm.batchPending}",
+                    if (vm.batchQueued > 0) "处理中 ${vm.batchQueued}" else null).joinToString("  ·  "),
+                    color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                if (mode == com.fieldalign.camera.data.CaptureMode.AUTO)
+                    Text("新测点类型：${com.fieldalign.camera.align.Defects.labels(vm.batchKinds)} ▾", color = Color(0xFF9AA5B1), fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 2.dp).clip(RoundedCornerShape(8.dp)).clickable { kindsOpen = true }.padding(horizontal = 6.dp, vertical = 2.dp))
+                vm.batchLast?.let {
+                    Text(it, color = if (it.startsWith("待确认") || it.startsWith("处理失败") || it.contains("⚠")) Amber else Color(0xFFB8C2CC), fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp).clickable(enabled = vm.batchLastZone != null) {
+                            vm.batchLastZone?.let { z -> vm.go(com.fieldalign.camera.Screen.ZoneDetail(z)) } })
+                }
+            }
             if (ghost != null && showGhost) Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("参考透明度", color = Color(0xFF9AA5B1), fontSize = 12.sp)
                 Spacer(Modifier.width(8.dp))
@@ -368,7 +399,7 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
                             else -> "±${g.acc.roundToInt()} 米"
                         }, color = Color(0xFFCBD2D9), fontSize = 12.sp)
                     }
-                    // 镜头朝向：同一点位不同方向的照片属于不同系列
+                    // 镜头朝向：同一点位不同方向的照片属于不同测点
                     val ps = pose
                     Text(when {
                         ps == null -> "朝向：无传感器"
@@ -397,7 +428,12 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
                                 ContextCompat.getMainExecutor(ctx), object : ImageCapture.OnImageSavedCallback {
                                     override fun onImageSaved(o: ImageCapture.OutputFileResults) {
                                         busy = false
-                                        vm.onCaptured(f, forcedZoneId = lockZone,
+                                        if (batch) {
+                                            vm.onBatchCaptured(f, mode, tracker.fresh(), poseTracker.latest,
+                                                forcedZoneId = lockZone, newQr = lockNewQr)
+                                            // 扫码锁定只管这一张：下一张多半是另一个测点
+                                            if (lockByScan || lockNewQr != null) unlock()
+                                        } else vm.onCaptured(f, forcedZoneId = lockZone,
                                             hintZoneId = if (lockByScan) lockZone else suggestZone,
                                             newQr = lockNewQr, loc = tracker.fresh(), pose = poseTracker.latest)
                                     }
@@ -409,7 +445,10 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
                 )
                 // 右：参考缩略图（有目标时）
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    ghost?.let {
+                    if (batch) Text("完成", color = Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber).clickable { vm.back() }
+                            .padding(horizontal = 18.dp, vertical = 10.dp))
+                    else ghost?.let {
                         Image(it.asImageBitmap(), "参考照片", Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
                             .border(2.dp, Color(0x66FFFFFF), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
                     }
@@ -417,4 +456,12 @@ fun CameraScreen(vm: AppViewModel, initialZoneId: Long?) {
             }
         }
     }
+    if (kindsOpen) androidx.compose.material3.AlertDialog(onDismissRequest = { kindsOpen = false },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { kindsOpen = false }) { Text("好") } },
+        title = { Text("新测点的病害类型") },
+        text = { Column {
+            Text("这一批新建的测点都用这个类型；之后可以在测点页单独修改。二维码里写了类型的按码。", fontSize = 13.sp, color = Muted)
+            Spacer(Modifier.width(1.dp).padding(4.dp))
+            KindPicker(vm.batchKinds) { vm.updateBatchKinds(it) }
+        } })
 }

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批量生成靶标 · 复拍对齐相机</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.form input { font: inherit; font-size: 15px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 100%; }
+.preview { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.preview span { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.how { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.how b { display: block; margin-bottom: 4px; }
+.err { color: var(--bad); font-size: 14px; }
+@media (max-width: 640px) { .form { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <a class="brand" href="/"><i></i>复拍对齐相机</a>
+  <nav><a href="/">首页</a><a href="/samples/">测试图片</a><a href="/process/">在线处理</a><a class="on" href="/targets/">靶标</a><a href="/viewer/">导出包查看器</a><a href="/download/">下载</a></nav>
+</div></header>
+<main>
+  <h1>批量生成靶标</h1>
+  <p class="muted">每个靶标 = 一个二维码（内容就是编号）+ 3 个圆点。A4 每页 6 个，按 100% 打印。手机 App 首页「生成靶标」也能生成同样的 PDF。</p>
+  <div class="card">
+    <div class="form">
+      <label>编号前缀<input id="prefix" value="T" maxlength="12"></label>
+      <label>起始号<input id="start" type="number" value="1" min="0"></label>
+      <label>数量（最多 300）<input id="count" type="number" value="24" min="1" max="300"></label>
+      <label>数字位数<input id="digits" type="number" value="4" min="1" max="8"></label>
+    </div>
+    <div class="preview" id="pv"></div>
+    <div class="row" style="margin-top:14px">
+      <a class="btn pri" id="pdf" href="#">下载靶标 PDF</a>
+      <a class="btn" id="csv" href="#">下载编号对应表 CSV</a>
+      <span class="err" id="err"></span>
+    </div>
+  </div>
+
+  <h2>怎么用</h2>
+  <div class="how">
+    <div class="card"><b>1. 打印、剪开</b><span class="muted small">打印时选「实际大小 / 100%」，二维码边长应为 40 mm。二维码和 3 个圆点分别剪下。</span></div>
+    <div class="card"><b>2. 随便贴</b><span class="muted small">二维码贴在裂缝旁边，3 个圆点分散贴在裂缝周围（不要挡住裂缝、不要排成一条直线）。每条裂缝用一个编号。</span></div>
+    <div class="card"><b>3. 拍照建档</b><span class="muted small">手机「拍照」对准拍一张，App 读到编号自动建测点；下次再拍同一编号，自动归入并对比。</span></div>
+    <div class="card"><b>4. 编号对应项目</b><span class="muted small">在 CSV 里填上每个编号对应的项目编号 / 名称，手机「编号对应」里导入，测点自动改名。也可以在手机上逐个填。</span></div>
+  </div>
+  <p class="muted small">提示：同一个编号只贴一处。前缀可以区分项目或批次（如 A、B2、QL-），下次生成从上次的最后一号往后接，避免重号。</p>
+</main>
+<footer>复拍对齐相机 · 靶标</footer>
+<script>
+const $ = s => document.querySelector(s);
+function upd() {
+  const p = $("#prefix").value.trim(), s = +$("#start").value, n = +$("#count").value, d = +$("#digits").value;
+  const ok = /^[A-Za-z0-9_-]{0,12}$/.test(p) && n >= 1 && n <= 300 && s >= 0 && d >= 1 && d <= 8;
+  $("#err").textContent = ok ? "" : "前缀只能用字母、数字、- 和 _；数量 1–300";
+  const code = k => p + String(k).padStart(d, "0");
+  $("#pv").innerHTML = ok ? [code(s), code(s + 1), n > 3 ? "…" : null, n > 2 ? code(s + n - 1) : null].filter(Boolean)
+      .map(x => `<span>${x}</span>`).join("") + `<span class="muted" style="font-family:inherit">共 ${n} 个 · ${Math.ceil(n / 6)} 页</span>` : "";
+  const q = `prefix=${encodeURIComponent(p)}&start=${s}&count=${n}&digits=${d}`;
+  $("#pdf").href = ok ? "/api/targets?" + q : "#"; $("#csv").href = ok ? "/api/targets?fmt=csv&" + q : "#";
+}
+document.querySelectorAll(".form input").forEach(i => i.oninput = upd); upd();
+</script>
+</body>
+</html>

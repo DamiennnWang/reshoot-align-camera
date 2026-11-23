@@ -12,3 +12,11 @@ real_data/
 宣传/blender/render/
 宣传/blender/tex/
 宣传/宣传片_*.mp4
+# 示例导出包：ZIP 是手机 App 导出的合成数据，没法用脚本重新生成，随仓库提供；报告目录可用 report.py 重新生成
+samples/export_demo/*
+!samples/export_demo/全部测点_demo.zip
+.claude/
+android/.kotlin/
+deploy/dist/
+deploy/bundle.tar.gz
+deploy/data/

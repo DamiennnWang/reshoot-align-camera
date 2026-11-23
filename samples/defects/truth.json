@@ -1,0 +1,129 @@
+{
+ "spall": {
+  "kind": "spall",
+  "area_mm2": 2039.1,
+  "center_mm": [
+   300,
+   195
+  ]
+ },
+ "rust": {
+  "kind": "rust",
+  "area_mm2": 1243.6,
+  "center_mm": [
+   85,
+   150
+  ]
+ },
+ "seep": {
+  "kind": "seep",
+  "area_mm2": 4345.8,
+  "center_mm": [
+   300,
+   200
+  ]
+ },
+ "effl": {
+  "kind": "effl",
+  "area_mm2": 1907.6,
+  "center_mm": [
+   100,
+   165
+  ]
+ },
+ "plain_nochange": {
+  "kind": "none"
+ },
+ "offset": {
+  "kind": "offset",
+  "disp_mm": 3.0,
+  "dir": "dy"
+ },
+ "joint": {
+  "kind": "joint",
+  "disp_mm": 2.0,
+  "dir": "dx"
+ },
+ "segments_nochange": {
+  "kind": "none"
+ },
+ "joint_1mm": {
+  "kind": "joint",
+  "disp_mm": 1.0,
+  "dir": "dx"
+ },
+ "bolts": {
+  "kind": "bolt",
+  "loose": [
+   1
+  ],
+  "loose_deg": 25,
+  "missing": [
+   3
+  ],
+  "bolts_mm": [
+   [
+    110,
+    90
+   ],
+   [
+    300,
+    115
+   ],
+   [
+    120,
+    205
+   ],
+   [
+    300,
+    210
+   ]
+  ]
+ },
+ "bolts_nochange": {
+  "kind": "none",
+  "bolts_mm": [
+   [
+    110,
+    90
+   ],
+   [
+    300,
+    115
+   ],
+   [
+    120,
+    205
+   ],
+   [
+    300,
+    210
+   ]
+  ]
+ },
+ "bolts_10deg": {
+  "kind": "bolt_small",
+  "loose": [
+   2
+  ],
+  "loose_deg": 10,
+  "bolts_mm": [
+   [
+    110,
+    90
+   ],
+   [
+    300,
+    115
+   ],
+   [
+    120,
+    205
+   ],
+   [
+    300,
+    210
+   ]
+  ]
+ }
+}

@@ -26,6 +26,7 @@ data class Zone(
     val azimuth: Double? = null,        // 参考照片拍摄时镜头朝向（度，北=0 顺时针），同一点位不同角度的系列靠它区分
     val pitch: Double? = null,          // 镜头俯仰角（度，水平=0，向上为正）
     val qrMm: Double? = null,           // 二维码打印边长（毫米），用于像素 → 毫米换算
+    val kinds: String? = null,          // 测点病害类型（Defects.Kind 代码，逗号分隔）；空 = 通用
 )
 
 @Entity(tableName = "photo", indices = [Index("zoneId")])
@@ -61,6 +62,7 @@ data class Photo(
     val crackGrowPx: Double? = null,    // 比参考新增的裂缝长度（像素）
     val crackJson: String? = null,      // 每条裂缝的明细 + 参考照片的裂缝统计
     val conclusion: String? = null,     // 文字结论
+    val findingsJson: String? = null,   // 病害分析明细（面状/位移/标记线/部件 + 标注图路径），见 Analysis.toJson
 )
 
 data class ZoneSummary(
@@ -69,11 +71,13 @@ data class ZoneSummary(
     val lat: Double? = null, val lon: Double? = null,
     val lastStatus: String? = null, val lastChanges: Int? = null,
     val azimuth: Double? = null, val pitch: Double? = null,
+    val kinds: String? = null, val lastConclusion: String? = null,
 )
 
 @Dao
 interface ZoneDao {
-    @Query("""SELECT z.id, z.qrText, z.name, z.refPhotoId, z.lat, z.lon, z.azimuth, z.pitch,
+    @Query("""SELECT z.id, z.qrText, z.name, z.refPhotoId, z.lat, z.lon, z.azimuth, z.pitch, z.kinds,
+              (SELECT conclusion FROM photo p WHERE p.zoneId = z.id AND p.id != z.refPhotoId ORDER BY takenAt DESC LIMIT 1) AS lastConclusion,
               (SELECT status FROM photo p WHERE p.zoneId = z.id AND p.id != z.refPhotoId ORDER BY takenAt DESC LIMIT 1) AS lastStatus,
               (SELECT changeRegions FROM photo p WHERE p.zoneId = z.id AND p.id != z.refPhotoId ORDER BY takenAt DESC LIMIT 1) AS lastChanges,
               (SELECT COUNT(*) FROM photo p WHERE p.zoneId = z.id) AS photoCount,
@@ -100,9 +104,13 @@ interface PhotoDao {
     @Insert suspend fun insert(p: Photo): Long
     @Update suspend fun update(p: Photo)
     @Query("DELETE FROM photo WHERE id = :id") suspend fun delete(id: Long)
+    /** 待确认照片（批量复拍时没能归类的，zoneId = -1）。 */
+    @Query("SELECT * FROM photo WHERE zoneId = -1 ORDER BY takenAt DESC") fun pending(): Flow<List<Photo>>
+    @Query("DELETE FROM photo WHERE zoneId = -1 AND path = :path") suspend fun deletePending(path: String)
+    @Query("SELECT * FROM photo WHERE zoneId != -1") suspend fun allPhotos(): List<Photo>
 }
 
-@Database(entities = [Zone::class, Photo::class], version = 6, exportSchema = false)
+@Database(entities = [Zone::class, Photo::class], version = 7, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun zones(): ZoneDao
     abstract fun photos(): PhotoDao
@@ -135,9 +143,16 @@ abstract class AppDb : RoomDatabase() {
                     db.execSQL("ALTER TABLE photo ADD COLUMN $c")
             }
         }
+        /** 6 → 7：测点病害类型、病害分析明细。 */
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE zone ADD COLUMN kinds TEXT")
+                db.execSQL("ALTER TABLE photo ADD COLUMN findingsJson TEXT")
+            }
+        }
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "fieldalign.db")
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigration()   // 更早的开发版本：重建
                 .build().also { inst = it }
         }

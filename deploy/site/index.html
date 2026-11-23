@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复拍对齐相机</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.hero { display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; align-items: center; margin: 10px 0 8px; }
+.hero p { font-size: 16px; }
+.hero .shot { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--card); }
+.hero .shot .pair { display: grid; grid-template-columns: 1fr 1fr; }
+.hero .shot figcaption { font-size: 12px; color: var(--muted); padding: 6px 10px; }
+.tile { display: flex; flex-direction: column; gap: 6px; color: var(--text); text-decoration: none !important; transition: border-color .15s; }
+.tile:hover { border-color: var(--amber); }
+.tile .ico { width: 36px; height: 36px; border-radius: 9px; background: var(--soft); border: 1px solid var(--line); display: grid; place-items: center; font-size: 18px; }
+.tile .go { margin-top: auto; color: var(--info); font-size: 14px; }
+.steps { counter-reset: s; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.steps .card::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 13px; margin-bottom: 6px; }
+@media (max-width: 760px) { .hero { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <a class="brand" href="/"><i></i>复拍对齐相机</a>
+  <nav><a class="on" href="/">首页</a><a href="/samples/">测试图片</a><a href="/process/">在线处理</a><a href="/targets/">靶标</a><a href="/viewer/">导出包查看器</a><a href="/download/">下载</a></nav>
+</div></header>
+<main>
+  <section class="hero">
+    <div>
+      <h1>同一个位置，隔一段时间再拍一次，<br>自动对齐、找出变化</h1>
+      <p class="muted">手机 App 负责现场拍照：半透明参考图引导对准，拍完自动对齐，判断裂缝延长 / 变宽、剥落、渗水、泛碱、锈蚀、位移、螺栓松动。
+        这个网站负责电脑端：看导出包、重新分析、生成报告。</p>
+      <div class="row">
+        <a class="btn pri" href="/download/">下载手机 App</a>
+        <a class="btn" href="/process/">在线处理照片</a>
+        <a class="btn" href="/viewer/?zip=/samples/export_demo/全部测点_demo.zip">看一个示例导出包</a>
+      </div>
+    </div>
+    <figure class="shot" style="margin:0">
+      <div class="pair"><img src="/samples/hard/curve_grow_ref.jpg" alt="参考照片" loading="lazy"><img src="/samples/hard/curve_grow_new.jpg" alt="本次照片" loading="lazy"></div>
+      <figcaption>左：上次拍的参考照片；右：这次复拍（裂缝延长）。点「在线处理」可以直接用这组试。</figcaption>
+    </figure>
+  </section>
+
+  <h2>功能</h2>
+  <div class="grid">
+    <a class="card tile" href="/download/"><span class="ico">📱</span><h3>手机 App</h3><span class="muted small">安卓 APK。批量建档、批量复拍、二维码 / 位置 / 图像自动配对、现场出结论。</span><span class="go">下载 →</span></a>
+    <a class="card tile" href="/process/"><span class="ico">⚙️</span><h3>在线处理</h3><span class="muted small">上传两张照片直接对比；或上传手机「导出全部」的 ZIP，在服务器上重新分析并生成报告。</span><span class="go">开始 →</span></a>
+    <a class="card tile" href="/viewer/"><span class="ico">🗂️</span><h3>导出包查看器</h3><span class="muted small">把手机导出的 ZIP 拖进来：前后对比滑块、病害标注、筛选、打印报告。文件只在你的浏览器里打开，不上传。</span><span class="go">打开 →</span></a>
+    <a class="card tile" href="/samples/"><span class="ico">🧪</span><h3>测试图片</h3><span class="muted small">算法测试用的合成样例：弯曲裂缝、剥落、阴影、病害类型、宽度测量、光照、畸变等，每组可一键在线处理。</span><span class="go">浏览 →</span></a>
+    <a class="card tile" href="/download/#toolkit"><span class="ico">💻</span><h3>电脑端软件</h3><span class="muted small">Python 工具包：批量生成报告、调阈值、离线查看器、打印靶标。和手机用同一套算法。</span><span class="go">下载 →</span></a>
+    <a class="card tile" href="/targets/"><span class="ico">🎯</span><h3>批量生成靶标</h3><span class="muted small">一次生成很多编号二维码（T0001、T0002…）和圆点，随便贴在不同裂缝旁；再用编号对应表对上项目编号。</span><span class="go">生成 →</span></a>
+  </div>
+
+  <h2>怎么配合使用</h2>
+  <div class="steps">
+    <div class="card"><h3>第一次：批量建档</h3><span class="muted small">每张照片一个测点，自动记位置和朝向；有二维码就按码命名。</span></div>
+    <div class="card"><h3>下次：批量复拍</h3><span class="muted small">按二维码，或位置 + 朝向 + 图像自动归入原测点；认不出的进「待确认」。</span></div>
+    <div class="card"><h3>导出全部</h3><span class="muted small">手机首页「导出全部」得到一个 ZIP（参考图、对齐图、标注图、表格）。</span></div>
+    <div class="card"><h3>电脑上看 / 复核</h3><span class="muted small">拖进「导出包查看器」看结果；或在「在线处理」上传，重新分析、调阈值、生成报告。</span></div>
+  </div>
+
+  <h2>说明</h2>
+  <div class="card small muted">
+    测试图片都是程序合成的（真实拍摄的混凝土纹理 + 模拟裂缝、剥落、光照、透视），用于验证算法，不是现场照片。
+    在线处理上传的文件只用于本次分析，结果保留 24 小时后自动删除。位移、螺栓、部件类分析目前只在手机上做。
+  </div>
+</main>
+<footer>复拍对齐相机 · <span id="ver">v0.4.0</span></footer>
+</body>
+</html>

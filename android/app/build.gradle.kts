@@ -13,10 +13,21 @@ android {
         applicationId = "com.fieldalign.camera"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 4
+        versionName = "0.4.0"
         ndk { abiFilters += listOf("arm64-v8a") }   // 只打 64 位真机，安装包更小
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 调试签名放在仓库里（android/app/debug.keystore，标准调试口令 android）：
+    // 换一台电脑编译出来的 APK 签名相同，手机上能直接覆盖升级、保留数据。正式分发前要换正式签名。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
@@ -37,7 +48,7 @@ android {
 }
 
 val copySamples by tasks.registering(Copy::class) {
-    from("../../samples") { include("*.jpg", "truth.json", "series/*.jpg", "distortion/*.jpg", "distortion/truth.json", "lighting/*.jpg", "lighting/truth.json", "robustness/*.jpg", "robustness/truth.json", "measure/*_ref.jpg", "measure/*_new.jpg", "measure/truth.json")
+    from("../../samples") { include("*.jpg", "truth.json", "series/*.jpg", "distortion/*.jpg", "distortion/truth.json", "lighting/*.jpg", "lighting/truth.json", "robustness/*.jpg", "robustness/truth.json", "measure/*_ref.jpg", "measure/*_new.jpg", "measure/truth.json", "defects/*.jpg", "defects/truth.json", "hard/*.jpg", "hard/truth.json")
         exclude("robustness/*_changes.jpg") }
     into(layout.buildDirectory.dir("generated/testSamples/samples"))
 }
@@ -65,6 +76,7 @@ dependencies {
 
     // 二维码：模型随应用打包，离线可用
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.zxing:core:3.5.3")       // 生成靶标二维码
     // 圆点检测、单应矩阵、ORB 特征、差分
     implementation("org.opencv:opencv:4.10.0")
 
